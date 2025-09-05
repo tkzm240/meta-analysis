@@ -1,3 +1,9 @@
 selenium
 gspread
 google-auth
+plotly
+statsmodels
+scipy
+pandas
+kaleido
+
