@@ -8,6 +8,14 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 
+options = Options()
+options.add_argument("--headless=new")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+
+chrome_path = os.environ.get("CHROME_PATH")
+if chrome_path:
+    options.binary_location = chrome_path
 # ===== gspread / service account =====
 import gspread
 from google.oauth2.service_account import Credentials
