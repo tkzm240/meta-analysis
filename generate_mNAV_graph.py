@@ -335,6 +335,8 @@ with open("assets/summary.md", "w", encoding="utf-8") as f:
 # README 差し替え
 JST = timezone(timedelta(hours=9))
 ts = datetime.now(JST).strftime("%Y-%m-%d %H:%M (%Z)")
+PAGES_URL = "https://tkzm240.github.io/meta-analysis"
+
 block = f"""
 **Last update (JST):** {ts}
 
@@ -342,7 +344,7 @@ block = f"""
 {summary_md}
 
 ### Charts
-[Open interactive chart 1](docs/fig1.html) ・ [Open interactive chart 2](docs/fig2.html)
+[Open interactive chart 1]({PAGES_URL}/fig1.html) ・ [Open interactive chart 2]({PAGES_URL}/fig2.html)
 
 ![fig1](assets/fig1.png)
 
