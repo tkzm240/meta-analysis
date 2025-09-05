@@ -2,7 +2,7 @@
 Meta analytics scraper - daily Google Sheets updater
 
 <!--REPORT:START-->
-**Last update (JST):** 2025-09-05 20:52 (UTC+09:00)
+**Last update (JST):** 2025-09-05 21:15 (UTC+09:00)
 
 ### Summary
 | Key           | BTC (holdings)   |   MNAV (pred) | Price (¥)   |
@@ -14,7 +14,7 @@ Meta analytics scraper - daily Google Sheets updater
 | 2.00 × median | 20,000.0000      |        6.0444 | 2,652       |
 
 ### Charts
-[Open interactive chart 1](docs/fig1.html) ・ [Open interactive chart 2](docs/fig2.html)
+[Open interactive chart 1](https://tkzm240.github.io/meta-analysis/fig1.html) ・ [Open interactive chart 2](https://tkzm240.github.io/meta-analysis/fig2.html)
 
 ![fig1](assets/fig1.png)
 
