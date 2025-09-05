@@ -1,0 +1,33 @@
+name: daily-run
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # UTC 14:00 = JST 23:00
+  workflow_dispatch:        # 手動実行も可能
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run script
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
+          GSA_JSON: ${{ secrets.GSA_JSON }}
+          # Seleniumは自動でchromedriverを見つけます。見つからない場合はPATHを追加してください。
+        run: |
+          python main.py
