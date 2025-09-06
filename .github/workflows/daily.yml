@@ -39,6 +39,7 @@ jobs:
           WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
           KEY_PATH: service_account.json
           CHROME_PATH: ${{ env.CHROME_PATH }}  # setup-chrome が設定していれば拾う
+          GSA_JSON: ${{ secrets.GSA_JSON }} 
         run: |
           python main.py
 
