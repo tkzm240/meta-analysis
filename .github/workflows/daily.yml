@@ -33,6 +33,15 @@ jobs:
         run: |
           echo '${{ secrets.GSA_JSON }}' > service_account.json
 
+      - name: Run legacy main.py (update sheet first)
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
+          KEY_PATH: service_account.json
+          CHROME_PATH: ${{ env.CHROME_PATH }}  # setup-chrome が設定していれば拾う
+        run: |
+          python main.py
+
       - name: Build report (generate docs/ & assets/)
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
