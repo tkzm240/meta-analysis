@@ -2,7 +2,7 @@
 Meta analytics scraper - daily Google Sheets updater
 
 <!--REPORT:START-->
-**Last update (JST):** 2025-09-06 12:05 (UTC+09:00)
+**Last update (JST):** 2025-09-06 12:07 (UTC+09:00)
 
 ### Summary
 | Key           | BTC (holdings)   |   MNAV (pred) | Price (¥)   |
