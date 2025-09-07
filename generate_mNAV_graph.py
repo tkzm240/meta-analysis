@@ -5,10 +5,23 @@ import plotly.io as pio
 import statsmodels.api as sm
 import gspread
 from google.oauth2.service_account import Credentials
-from IPython.display import display
 from plotly.colors import sample_colorscale, hex_to_rgb
 import warnings
 from statsmodels.tools.sm_exceptions import IterationLimitWarning
+
+try:
+    from IPython.display import display
+except Exception:
+    def display(x):
+        try:
+            import pandas as _pd
+            if isinstance(x, _pd.DataFrame):
+                print(x.head().to_string())
+                return
+        except Exception:
+            pass
+        print(x)
+
 
 # 収束警告は表示しない（必要なら外してください）
 warnings.simplefilter("ignore", IterationLimitWarning)
