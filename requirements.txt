@@ -9,3 +9,4 @@ gspread
 google-auth
 selenium
 tabulate
+IPython
