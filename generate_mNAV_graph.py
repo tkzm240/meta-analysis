@@ -24,7 +24,7 @@ WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
 KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 
 # 強調する q（代表線）
-HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
+HILO_MIN = float(os.getenv("HILO_MIN", 0.005))
 HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 
 # 背景グラデーション帯のqレンジ（★追加）
