@@ -520,18 +520,31 @@ for item in figs:
 
 # Summary（Markdown）
 def _to_markdown_safe(df):
+    """tabulate が無くても必ず表文字列を返す"""
     try:
         return df.to_markdown(index=False)
     except Exception:
         return df.to_string(index=False)
-summary_md = _to_markdown_safe(df_summary_disp)
+
+# df_summary_disp が無ければ combined_table を使う（無ければ簡易表）
+if 'df_summary_disp' in globals() and isinstance(df_summary_disp, pd.DataFrame):
+    _df_src = df_summary_disp
+elif 'combined_table' in globals() and isinstance(combined_table, pd.DataFrame):
+    _df_src = combined_table
+else:
+    _df_src = pd.DataFrame([{"Message": "(no data)"}])
+
+summary_md = _to_markdown_safe(_df_src)
+
+os.makedirs("assets", exist_ok=True)
 with open("assets/summary.md", "w", encoding="utf-8") as f:
     f.write(summary_md)
 
-# README 差し替え
+# タイムスタンプ
 JST = timezone(timedelta(hours=9))
 ts = datetime.now(JST).strftime("%Y-%m-%d %H:%M (%Z)")
 
+# 図リンク + PNG（figs / PAGES_URL は前段で定義済みの想定）
 chart_blocks = []
 for i, item in enumerate(figs, start=1):
     chart_blocks.append(
@@ -551,7 +564,7 @@ block = f"""
 """.strip()
 
 def replace_between_markers(text, start, end, replacement):
-    # 後方参照の\1が文字として出ないよう、ラムダで安全に置換
+    # 後方参照の \1 などが出力に混ざらないよう lambda で置換
     pattern = re.compile(rf"({re.escape(start)})(.*)({re.escape(end)})", flags=re.DOTALL)
     return pattern.sub(lambda m: m.group(1) + "\n" + replacement + "\n" + m.group(3), text)
 
@@ -562,19 +575,21 @@ end_marker   = "<!--REPORT:END-->"
 if os.path.exists(readme_path):
     with open(readme_path, "r", encoding="utf-8") as f:
         readme = f.read()
+    # マーカーが無ければ新設
     if start_marker not in readme or end_marker not in readme:
         readme = readme.rstrip() + f"\n\n{start_marker}\n{block}\n{end_marker}\n"
-    new_readme = replace_between_markers(readme, start_marker, end_marker, block)
-    if new_readme != readme:
-        with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(new_readme)
-        print("README updated.")
     else:
-        print("README unchanged.")
+        readme = replace_between_markers(readme, start_marker, end_marker, block)
+    # 過去の誤置換で先頭に混入しがちな「\1 」を念のため除去
+    readme = re.sub(rf"({re.escape(start_marker)}\s*)\\1\s*", r"\1", readme)
+    with open(readme_path, "w", encoding="utf-8") as f:
+        f.write(readme)
+    print("README updated.")
 else:
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(f"# Meta Analysis\n\n{start_marker}\n{block}\n{end_marker}\n")
     print("README created.")
+
 
 # モバイル用ダッシュボード（docs/index.html）
 def _safe_html_table(df):
