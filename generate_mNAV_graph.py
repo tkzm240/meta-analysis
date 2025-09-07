@@ -1,3 +1,4 @@
+# generate_mNAV_graph.py
 # === 必要パッケージ ===
 import os, numpy as np, pandas as pd
 import plotly.graph_objects as go
@@ -9,6 +10,7 @@ from plotly.colors import sample_colorscale, hex_to_rgb
 import warnings
 from statsmodels.tools.sm_exceptions import IterationLimitWarning
 
+# display の両対応（CIでは print にフォールバック）
 try:
     from IPython.display import display
 except Exception:
@@ -22,7 +24,6 @@ except Exception:
             pass
         print(x)
 
-
 # 収束警告は表示しない（必要なら外してください）
 warnings.simplefilter("ignore", IterationLimitWarning)
 
@@ -33,7 +34,7 @@ HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 # --------- 設定（環境変数で上書き可）---------
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1OdhLsAZYVsFz5xcGeuuiuH7JoYyzz6AaG0j2A9Jw1_4").replace("Ja","zz")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
-KEY_PATH       = os.getenv("KEY_PATH", "/content/optimal-bivouac-471208-f4-ec84cb2443af.json")
+KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 
 # --------- Google Sheets 読み込み ---------
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
@@ -210,7 +211,11 @@ def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_p
     d["log_y"] = d["y"]
     return d
 
-df_price = make_valid_price_df(df, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man)
+if stock_col is None:
+    # 株価列がなければ価格系の図は空で作る（処理継続）
+    df_price = pd.DataFrame(columns=["date","price_y","nav1000","btc1000","log_x","y","log_y"])
+else:
+    df_price = make_valid_price_df(df, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man)
 
 def latest_star_price(d):
     if d.empty: return None
@@ -220,6 +225,8 @@ def latest_star_price(d):
 pt_price = latest_star_price(df_price)
 
 def fit_quantiles_logy(d, q_list):
+    if d.empty:
+        return {}
     X = sm.add_constant(pd.Series(d["log_x"].values, name="log_x"))
     y = pd.Series(d["y"].values, name="log10_price")
     out = {}
@@ -285,8 +292,6 @@ display(combined_table)
 
 # ============================================================
 # 可視化：連続グラデーション + 代表線 + ⭐
-#  上：mNAV vs log10(NAV/1000)   … hover は「BTC/1000株の“保有数(BTC)”＋mNAV」
-#  下：log10(Price) vs log10(NAV/1000) … hover は「BTC/1000株の“保有数(BTC)”＋log10 Price」
 # ============================================================
 
 def _qk(q): return float(round(float(q), 6))
@@ -591,24 +596,15 @@ def make_plot_axis_price_log(d, qlines, star_pt, colorscale="Turbo",
     )
     return fig
 
-
-# ===== 出力（グラフ） =====
-fig_jpy = make_plot_axis("JPY", df_jpy, ql_jpy, pt_jpy, colorscale="Turbo")
+# ===== 図の生成（ここでは show は呼ばない！） =====
+fig_jpy       = make_plot_axis("JPY", df_jpy, ql_jpy, pt_jpy, colorscale="Turbo")
 fig_price_log = make_plot_axis_price_log(df_price, ql_price, pt_price, colorscale="Turbo")
-pio.show(fig_jpy)
-pio.show(fig_price_log)
 
-
-# ===== 騰落率ライン（％）のデフォルト =====
+# ===== 騰落率ライン（％） =====
 UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))   # 例：+100%
 LOWER_ERR = float(os.getenv("RELERR_LOWER", "-50"))   # 例：-50%
 
 def make_relerr_mnav(d, qlines, star_pt=None, baseline_price_yen=np.nan):
-    """
-    図1用：mNAVの q=0.50 回帰からの相対誤差（%）を描く。
-    hover: BTC/1000, Actual mNAV, Pred mNAV, Error%
-    右上に、⭐位置で UPPER/LOWER を満たす mNAV と そこから換算した株価(円)を注記（基準株価があれば）。
-    """
     if d.empty or (0.5 not in qlines):
         return go.Figure().update_layout(title="Relative Error from q=0.50 (mNAV)")
 
@@ -658,11 +654,6 @@ def make_relerr_mnav(d, qlines, star_pt=None, baseline_price_yen=np.nan):
     return fig
 
 def make_relerr_logprice(d, qlines, star_pt=None):
-    """
-    図2用：log10(Price) 回帰（q=0.50）からの“価格ベース”相対誤差（%）。
-    hover: BTC/1000, Price(実測/予測), log10(実測/予測), Error%
-    右上に⭐位置で UPPER/LOWER を満たす“価格(円)”を注記。
-    """
     if d.empty or (0.5 not in qlines):
         return go.Figure().update_layout(title="Relative Error from q=0.50 (Price)")
 
@@ -713,15 +704,35 @@ def make_relerr_logprice(d, qlines, star_pt=None):
     )
     return fig
 
-# ===== 既存：2つの主図 =====
-fig_jpy       = make_plot_axis("JPY", df_jpy, ql_jpy, pt_jpy, colorscale="Turbo")
-fig_price_log = make_plot_axis_price_log(df_price, ql_price, pt_price, colorscale="Turbo")
-
-# ===== 新規：それぞれの騰落率図 =====
 fig_rel_mnav  = make_relerr_mnav(df_jpy,   ql_jpy,   star_pt=pt_jpy,   baseline_price_yen=baseline_price_yen)
 fig_rel_price = make_relerr_logprice(df_price, ql_price, star_pt=pt_price)
 
-# --- サブプロット用 注記テキストを作るヘルパ ---
+# ------- サブプロットまとめ図（READMEには貼らず任意運用したい場合は残す） -------
+from plotly.subplots import make_subplots
+
+fig_grid = make_subplots(
+    rows=2, cols=2,
+    subplot_titles=[
+        "図1: mNAV vs log10(NAV/1000)",
+        "図1の騰落率（q=0.50基準）",
+        "図2: log10(Price) vs log10(NAV/1000)",
+        "図2の騰落率（q=0.50基準）"
+    ],
+    horizontal_spacing=0.08, vertical_spacing=0.12
+)
+
+for tr in fig_jpy.data:        fig_grid.add_trace(tr, row=1, col=1)
+for tr in fig_rel_mnav.data:   fig_grid.add_trace(tr, row=1, col=2)
+for tr in fig_price_log.data:  fig_grid.add_trace(tr, row=2, col=1)
+for tr in fig_rel_price.data:  fig_grid.add_trace(tr, row=2, col=2)
+
+fig_grid.add_hline(y=0, row=1, col=2, line=dict(color="gray", dash="dash"))
+fig_grid.add_hline(y=UPPER_ERR, row=1, col=2, line=dict(color="rgba(30,160,30,0.85)", dash="dot"))
+fig_grid.add_hline(y=LOWER_ERR, row=1, col=2, line=dict(color="rgba(30,60,200,0.85)", dash="dot"))
+fig_grid.add_hline(y=0, row=2, col=2, line=dict(color="gray", dash="dash"))
+fig_grid.add_hline(y=UPPER_ERR, row=2, col=2, line=dict(color="rgba(30,160,30,0.85)", dash="dot"))
+fig_grid.add_hline(y=LOWER_ERR, row=2, col=2, line=dict(color="rgba(30,60,200,0.85)", dash="dot"))
+
 def _note_text_relerr_mnav(qlines, star_pt, baseline_price_yen):
     if (star_pt is None) or (0.5 not in qlines) or not np.isfinite(baseline_price_yen) or baseline_price_yen <= 0:
         return None
@@ -747,98 +758,38 @@ def _note_text_relerr_price(qlines, star_pt):
         lines.append(f"{tag} {pct:+.0f}% → Price ¥{price_target:,.0f}")
     return "<br>".join(lines)
 
-
-# 左右の x 範囲をそろえるためのヘルパ
-def _extended_xrange(d):
-    x_min = float(d["log_x"].min())
-    x_max = float(d["log_x"].max())
-    return [x_min, x_min + 1.3*(x_max - x_min)]
-
-from plotly.subplots import make_subplots
-
-fig_grid = make_subplots(
-    rows=2, cols=2,
-    subplot_titles=[
-        "図1: mNAV vs log10(NAV/1000)",
-        "図1の騰落率（q=0.50基準）",
-        "図2: log10(Price) vs log10(NAV/1000)",
-        "図2の騰落率（q=0.50基準）"
-    ],
-    horizontal_spacing=0.08, vertical_spacing=0.12
-)
-
-# 左上：図1
-for tr in fig_jpy.data:
-    fig_grid.add_trace(tr, row=1, col=1)
-
-# 右上：図1の騰落率
-for tr in fig_rel_mnav.data:
-    fig_grid.add_trace(tr, row=1, col=2)
-fig_grid.add_hline(y=0,         row=1, col=2, line=dict(color="gray", dash="dash"))
-fig_grid.add_hline(y=UPPER_ERR, row=1, col=2, line=dict(color="rgba(30,160,30,0.85)", dash="dot"))
-fig_grid.add_hline(y=LOWER_ERR, row=1, col=2, line=dict(color="rgba(30,60,200,0.85)", dash="dot"))
 note1 = _note_text_relerr_mnav(ql_jpy, pt_jpy, baseline_price_yen)
-if note1:
-    fig_grid.add_annotation(
-        row=1, col=2,
-        x=1, y=1, xref="x domain", yref="y domain",
-        xanchor="right", yanchor="top",
-        text=note1, showarrow=False,
-        bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
-    )
-
-# 左下：図2
-for tr in fig_price_log.data:
-    fig_grid.add_trace(tr, row=2, col=1)
-
-# 右下：図2の騰落率
-for tr in fig_rel_price.data:
-    fig_grid.add_trace(tr, row=2, col=2)
-fig_grid.add_hline(y=0,         row=2, col=2, line=dict(color="gray", dash="dash"))
-fig_grid.add_hline(y=UPPER_ERR, row=2, col=2, line=dict(color="rgba(30,160,30,0.85)", dash="dot"))
-fig_grid.add_hline(y=LOWER_ERR, row=2, col=2, line=dict(color="rgba(30,60,200,0.85)", dash="dot"))
 note2 = _note_text_relerr_price(ql_price, pt_price)
+if note1:
+    fig_grid.add_annotation(row=1, col=2, x=1, y=1, xref="x domain", yref="y domain",
+                            xanchor="right", yanchor="top",
+                            text=note1, showarrow=False,
+                            bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1)
 if note2:
-    fig_grid.add_annotation(
-        row=2, col=2,
-        x=1, y=1, xref="x domain", yref="y domain",
-        xanchor="right", yanchor="top",
-        text=note2, showarrow=False,
-        bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1
-    )
+    fig_grid.add_annotation(row=2, col=2, x=1, y=1, xref="x domain", yref="y domain",
+                            xanchor="right", yanchor="top",
+                            text=note2, showarrow=False,
+                            bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.2)", borderwidth=1)
 
-# 軸ラベル
-fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=1, col=1)
-fig_grid.update_yaxes(title_text="mNAV",                          row=1, col=1)
-fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=1, col=2)
-fig_grid.update_yaxes(title_text="Relative Error (%)",            row=1, col=2)
-fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=2, col=1)
-fig_grid.update_yaxes(title_text="log10 Price (¥)",               row=2, col=1)
-fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=2, col=2)
-fig_grid.update_yaxes(title_text="Relative Error (%)",            row=2, col=2)
-
-# 横軸レンジを上下で統一（見た目のズレ防止）
+# 軸・レンジ・凡例最終調整
 def _extended_xrange(d):
     x_min = float(d["log_x"].min()); x_max = float(d["log_x"].max())
     return [x_min, x_min + 1.3*(x_max - x_min)]
-xr_top    = _extended_xrange(df_jpy)
-xr_bottom = _extended_xrange(df_price)
-fig_grid.update_xaxes(range=xr_top,    row=1, col=1)
-fig_grid.update_xaxes(range=xr_top,    row=1, col=2)
-fig_grid.update_xaxes(range=xr_bottom, row=2, col=1)
-fig_grid.update_xaxes(range=xr_bottom, row=2, col=2)
+xr_top    = _extended_xrange(df_jpy) if not df_jpy.empty else [0, 1]
+xr_bottom = _extended_xrange(df_price) if not df_price.empty else [0, 1]
+fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=1, col=1, range=xr_top)
+fig_grid.update_yaxes(title_text="mNAV", row=1, col=1)
+fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=1, col=2, range=xr_top)
+fig_grid.update_yaxes(title_text="Relative Error (%)", row=1, col=2)
+fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=2, col=1, range=xr_bottom)
+fig_grid.update_yaxes(title_text="log10 Price (¥)", row=2, col=1)
+fig_grid.update_xaxes(title_text="log10( BTC NAV per 1,000 shares [JPY] )", row=2, col=2, range=xr_bottom)
+fig_grid.update_yaxes(title_text="Relative Error (%)", row=2, col=2)
 
-# それぞれの段（上段／下段）で x をリンク（ズーム・パンを同期）
-# 上段：右上 (x2) を 左上 (x) にリンク
 fig_grid.update_xaxes(matches="x", row=1, col=2)
-# 下段：右下 (x4) を 左下 (x3) にリンク
 fig_grid.update_xaxes(matches="x3", row=2, col=2)
-
-
-# スパイクで縦カーソルも揃える（各パネル内）
 fig_grid.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
 
-# 全体レイアウト（unified でも “サブプロット内” で統一）
 fig_grid.update_layout(
     title="Meta-Analysis",
     template="plotly_white",
@@ -847,13 +798,7 @@ fig_grid.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1)
 )
 
-# ---------- ここから追記（凡例の重複排除＆順序整理） ----------
 def tidy_legend(fig):
-    """
-    同名の凡例は最初だけ表示(showlegend=True)、以降は非表示にする。
-    さらに、凡例の並び順を希望順に近づける（trace の順序のみで制御）。
-    """
-    # ① 同名の凡例をデデュープ
     seen = set()
     for tr in fig.data:
         nm = getattr(tr, "name", None)
@@ -863,11 +808,9 @@ def tidy_legend(fig):
             tr.showlegend = False
         else:
             tr.showlegend = True
-            tr.legendgroup = nm  # グループ化（クリック折り畳みで利く）
+            tr.legendgroup = nm
             seen.add(nm)
 
-    # ② 凡例の並び順（優先度）を決める
-    #   ※存在しない名前は末尾に回ります
     desired_order = [
         "q=0.98", "q=0.50", "q=0.05",
         "Actual (mNAV)", "Actual (log10 Price)",
@@ -875,33 +818,22 @@ def tidy_legend(fig):
         "現在 ⭐",
     ]
     prio = {name: i for i, name in enumerate(desired_order)}
-
-    # data を並べ替え（プロット表示には影響なし／凡例順だけが変わる）
     fig.data = tuple(sorted(fig.data, key=lambda tr: prio.get(getattr(tr, "name", ""), 999)))
-
-    # ③ 凡例の見た目
     fig.update_layout(
         legend=dict(
-            orientation="h",               # 横並び
+            orientation="h",
             yanchor="bottom", y=1.03,
             xanchor="center", x=0.5,
-            traceorder="normal",           # 並べ替え結果をそのまま
+            traceorder="normal",
             itemsizing="constant",
             font=dict(size=12),
         )
     )
 
 tidy_legend(fig_grid)
-pio.show(fig_grid)
-
 
 # ------------------------------
-# 成果物の書き出し（PNG/HTML/表/README差し替え/モバイルページ）
-# ※ 事前に以下4図を作ってある前提：
-#   fig_jpy        : 図1 mNAV vs log10(NAV/1000 [JPY])
-#   fig_price_log  : 図2 log10(Price) vs log10(NAV/1000 [JPY])
-#   fig_rel_mnav   : 図1の騰落率（q=0.50基準）
-#   fig_rel_price  : 図2の騰落率（q=0.50基準）
+# 成果物の書き出し（PNG/HTML/README差し替え/モバイルページ）
 # ------------------------------
 os.makedirs("assets", exist_ok=True)
 os.makedirs("docs", exist_ok=True)
@@ -938,15 +870,17 @@ figs = [
     },
 ]
 
-# 画像（PNG）… kaleido が必要（pip install -U kaleido）
+# 画像（PNG）… kaleido が必要
 for item in figs:
-    pio.write_image(item["fig"], item["png"], width=1200, height=720, scale=2)
+    # 誤差図は縦を少し低く
+    h = 600 if "fig3" in item["png"] or "fig4" in item["png"] else 720
+    pio.write_image(item["fig"], item["png"], width=1200, height=h, scale=2)
 
 # インタラクティブ HTML
 for item in figs:
     item["fig"].write_html(item["html"], include_plotlyjs="cdn", full_html=True)
 
-# 既存の Summary テーブル（df_summary_disp）がある場合はそれを利用（なければ空でOK）
+# Summary テーブルをREADMEに直接埋め込み
 try:
     summary_md = df_summary_disp.to_markdown(index=False)
 except Exception:
@@ -960,7 +894,7 @@ from datetime import datetime, timezone, timedelta
 JST = timezone(timedelta(hours=9))
 ts = datetime.now(JST).strftime("%Y-%m-%d %H:%M (%Z)")
 
-# あなたの Pages ルート（要自分のリポに合わせて変更）
+# GitHub Pages のルートURL（リポに合わせて必要なら変更）
 PAGES_URL = "https://tkzm240.github.io/meta-analysis"
 
 # 各図ブロック（リンク→PNGの順）を生成
@@ -985,7 +919,7 @@ block = f"""
 def replace_between_markers(text, start, end, replacement):
     import re
     pattern = re.compile(rf"({re.escape(start)})(.*)({re.escape(end)})", flags=re.DOTALL)
-    return pattern.sub(rf"\\1\n{replacement}\n\\3", text)
+    return pattern.sub(r"\\1\n" + replacement + r"\n\\3", text)
 
 readme_path = "README.md"
 start_marker = "<!--REPORT:START-->"
@@ -994,11 +928,9 @@ end_marker   = "<!--REPORT:END-->"
 if os.path.exists(readme_path):
     with open(readme_path, "r", encoding="utf-8") as f:
         readme = f.read()
-
     # マーカーが無ければ末尾に作る
     if start_marker not in readme or end_marker not in readme:
         readme = readme.rstrip() + f"\n\n{start_marker}\n{block}\n{end_marker}\n"
-
     new_readme = replace_between_markers(readme, start_marker, end_marker, block)
     if new_readme != readme:
         with open(readme_path, "w", encoding="utf-8") as f:
@@ -1080,6 +1012,3 @@ index_html = f"""<!doctype html>
 with open("docs/index.html", "w", encoding="utf-8") as f:
     f.write(index_html)
 print("docs/index.html written with 4 charts.")
-
-
-
