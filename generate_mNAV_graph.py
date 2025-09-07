@@ -24,7 +24,7 @@ WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
 KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 
 # 強調する q（代表線）
-HILO_MIN = float(os.getenv("HILO_MIN", 0.05))
+HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
 HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 
 # 騰落率ライン（％）
@@ -114,7 +114,12 @@ pt_usd = latest_star(df, "BTCNAV1000_USD")
 pt_jpy = latest_star(df, "BTCNAV1000_JPY")
 
 # ================== 分位点回帰 ==================
-base_quantiles = sorted(set([0.01,0.03,0.05] + [round(q,2) for q in np.arange(0.1,1.0,0.1)] + [0.95,0.97,0.99]))
+# 0.02 と 0.98 を追加
+base_quantiles = sorted(set(
+    [0.01, 0.02, 0.03, 0.05] +
+    [round(q, 2) for q in np.arange(0.10, 1.00, 0.10)] +  # 0.10, 0.20, ... 0.90
+    [0.95, 0.97, 0.98, 0.99]
+))
 quantiles = base_quantiles[:]  # hover/表 用
 
 def fit_quantiles(d, q_list):
