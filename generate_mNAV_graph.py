@@ -27,6 +27,10 @@ KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
 HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 
+# 背景グラデーション帯のqレンジ（★追加）
+Q_MIN_SHADE = float(os.getenv("Q_MIN_SHADE", "0.01"))
+Q_MAX_SHADE = float(os.getenv("Q_MAX_SHADE", "0.99"))
+
 # 騰落率ライン（％）
 UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))   # 例：+100%
 LOWER_ERR = float(os.getenv("RELERR_LOWER", "-50"))   # 例：-50%
@@ -311,7 +315,7 @@ def make_plot_axis(axis_name, d, qlines, star_pt, colorscale="Turbo",
                    quantiles_for_hover=None, hilo_min=HILO_MIN, hilo_max=HILO_MAX):
     if d is None or len(d)==0 or not qlines:
         return go.Figure().update_layout(title=f"{axis_name} (no data)")
-    qs_dense = np.linspace(0.01, 0.99, 120)
+    qs_dense = np.linspace(Q_MIN_SHADE, Q_MAX_SHADE, 120)
     highlights = np.array([_qk(hilo_min), _qk(0.50), _qk(hilo_max)])
     qs_all   = np.unique(np.concatenate([qs_dense, highlights]))
 
@@ -342,8 +346,10 @@ def make_plot_axis(axis_name, d, qlines, star_pt, colorscale="Turbo",
         hovertemplate=("BTC / 1,000 sh: %{customdata:,.4f} BTC<br>mNAV: %{y:,.4f}<extra></extra>")
     ))
 
-    add_smooth_gradient_bands(fig, xg, preds_grid, q_min=0.01, q_max=0.99,
-                              colorscale=colorscale, alpha=0.22, dense_n=80)
+    add_smooth_gradient_bands(
+    fig, xg, preds_grid,
+    q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE,
+    colorscale=colorscale, alpha=0.22, dense_n=80)
 
     LINE_COLORS = get_line_colors(hilo_min, hilo_max)
     for q in highlights:
@@ -434,8 +440,10 @@ def make_plot_axis_price_log(d, qlines, star_pt, colorscale="Turbo",
                        "log10 Price (¥): %{customdata[1]:.4f}<extra></extra>")
     ))
 
-    add_smooth_gradient_bands_log(fig, xg, preds_grid_log, q_min=0.01, q_max=0.99, num=120,
-                                  colorscale=colorscale, alpha=0.24)
+    add_smooth_gradient_bands_log(
+    fig, xg, preds_grid_log,
+    q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE, num=120,
+    colorscale=colorscale, alpha=0.24)
 
     LINE_COLORS = get_line_colors(hilo_min, hilo_max)
     for q in highlights:
