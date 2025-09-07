@@ -28,8 +28,8 @@ HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
 HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 
 # 背景グラデーション帯のqレンジ（★追加）
-Q_MIN_SHADE = float(os.getenv("Q_MIN_SHADE", "0.01"))
-Q_MAX_SHADE = float(os.getenv("Q_MAX_SHADE", "0.99"))
+Q_MIN_SHADE = float(os.getenv("Q_MIN_SHADE", "0.005"))
+Q_MAX_SHADE = float(os.getenv("Q_MAX_SHADE", "0.995"))
 
 # 騰落率ライン（％）
 UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))   # 例：+100%
