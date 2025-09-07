@@ -609,22 +609,26 @@ for item in figs:
 for item in figs:
     item["fig"].write_html(item["html"], include_plotlyjs="cdn", full_html=True)
 
-# ===== Summary（表）→ Markdown 作成 & README 置換（正規化付き） =====
+
+# ===== Summary（表）→ Markdown 作成 =====
 def _to_markdown_safe(df_in):
     try:
         return df_in.to_markdown(index=False)
     except Exception:
         return df_in.to_string(index=False)
 
-_df_src   = df_summary_disp if isinstance(df_summary_disp, pd.DataFrame) else pd.DataFrame([{"Message":"(no data)"}])
+_df_src    = df_summary_disp if isinstance(df_summary_disp, pd.DataFrame) else pd.DataFrame([{"Message":"(no data)"}])
 summary_md = _to_markdown_safe(_df_src)
 
+os.makedirs("assets", exist_ok=True)
 with open("assets/summary.md", "w", encoding="utf-8") as f:
     f.write(summary_md)
 
+# タイムスタンプ
 JST = timezone(timedelta(hours=9))
 ts  = datetime.now(JST).strftime("%Y-%m-%d %H:%M (%Z)")
 
+# 図リンク + PNG（figs / PAGES_URL は前段で定義済み）
 chart_blocks = []
 for i, item in enumerate(figs, start=1):
     chart_blocks.append(
@@ -633,49 +637,27 @@ for i, item in enumerate(figs, start=1):
     )
 charts_md = "\n\n".join(chart_blocks)
 
-def build_report_block():
-    return (
-        f"**Last update (JST):** {ts}\n\n"
-        f"### Summary\n{summary_md}\n\n"
-        f"### Charts\n{charts_md}"
-    )
+# README に入れる本文
+block = (
+    f"**Last update (JST):** {ts}\n\n"
+    f"### Summary\n{summary_md}\n\n"
+    f"### Charts\n{charts_md}"
+)
 
+# ===== README を「完全に」再生成（先頭の見出しも固定）=====
 readme_path  = "README.md"
 start_marker = "<!--REPORT:START-->"
 end_marker   = "<!--REPORT:END-->"
+preface = "# meta-analysis\n\nMeta analytics scraper - daily Google Sheets updater\n"
 
-def normalize_and_insert(text, replacement):
-    """最初の START〜最後の END を replacement で置換。無ければ末尾に新設。"""
-    starts = [m.start() for m in re.finditer(re.escape(start_marker), text)]
-    ends   = [m.end()   for m in re.finditer(re.escape(end_marker), text)]
-    if starts and ends:
-        prefix = text[:starts[0]]
-        suffix = text[ends[-1]:]
-        body   = f"\n{start_marker}\n{replacement}\n{end_marker}\n"
-        return prefix.rstrip() + "\n\n" + body + "\n" + suffix.lstrip()
-    base = text.rstrip()
-    body = f"\n\n{start_marker}\n{replacement}\n{end_marker}\n"
-    return base + body
+new_readme = f"{preface}\n{start_marker}\n{block}\n{end_marker}\n"
 
-report_block = build_report_block()
+with open(readme_path, "w", encoding="utf-8") as f:
+    f.write(new_readme)
+print("README overwritten.")  # ← これがログに出ていれば上書き成功
 
-if os.path.exists(readme_path):
-    with open(readme_path, "r", encoding="utf-8") as f:
-        readme = f.read()
-    new_readme = normalize_and_insert(readme, report_block)
-    # （保険）過去の誤置換の \1 を除去
-    new_readme = re.sub(rf"({re.escape(start_marker)}\s*)\\1\s*", r"\1", new_readme)
-    if new_readme != readme:
-        with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(new_readme)
-        print("README updated.")
-    else:
-        print("README unchanged.")
-else:
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write("# Meta Analysis\n\n")
-        f.write(f"{start_marker}\n{report_block}\n{end_marker}\n")
-    print("README created.")
+
+
 
 # ================== モバイル用ダッシュボード（docs/index.html） ==================
 def _safe_html_table(df_in):
