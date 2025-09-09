@@ -1,7 +1,5 @@
 # meta-analysis
 
-Meta analytics scraper - daily Google Sheets updater
-
 <!--REPORT:START-->
 **Last update (JST):** 2025-09-08 23:44 (UTC+09:00)
 
