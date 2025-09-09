@@ -694,8 +694,9 @@ charts_md = "\n\n".join(chart_blocks)
 # README に入れる本文
 block = (
     f"**Last update (JST):** {ts}\n\n"
-    f"### Summary\n{summary_md}\n\n"
-    f"{_to_markdown_safe(metrics_df)}\n\n"
+    f"### Summary\n"
+    f"{headline_md}\n\n"   # ← 箇条書き（"  \n" で強制改行済み）
+    f"{summary_md}\n\n"    # ← その下にテーブル
     f"### Charts\n{charts_md}"
 )
 
