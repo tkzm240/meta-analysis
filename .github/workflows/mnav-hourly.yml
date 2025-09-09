@@ -1,0 +1,48 @@
+name: mnav-hourly
+
+on:
+  schedule:
+    - cron: '0 1-8 * * *'   # 01:00–08:00 UTC = 10:00–17:00 JST（毎時）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 連続キック時の競合を回避
+concurrency:
+  group: mnav-hourly
+  cancel-in-progress: true
+
+jobs:
+  build-graphs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write service account json
+        run: echo '${{ secrets.GSA_JSON }}' > service_account.json
+
+      - name: Build report (generate docs & assets)
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
+          KEY_PATH: service_account.json
+        run: python generate_mNAV_graph.py
+
+      - name: Commit and push docs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase || true
+          git add docs assets README.md || true
+          git commit -m "Update docs by Actions" || echo "nothing to commit"
+          git push
