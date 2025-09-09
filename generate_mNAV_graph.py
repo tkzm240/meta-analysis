@@ -156,7 +156,7 @@ def compute_baseline_price_yen(df_all, mnav_col, stock_col_name):
 
 baseline_price_yen, baseline_idx = compute_baseline_price_yen(df, col_mnav, stock_col)
 
-# ===== README先頭に出す「Bitcoin価格／株価（mNAV=1）」を取得 =====
+# ===== README用：箇条書きメトリクス（Bitcoin価格／株価） =====
 def latest_value(df_all, col):
     """dateが最大の行の値を返す（NaNは除外）。"""
     if col is None:
@@ -167,35 +167,35 @@ def latest_value(df_all, col):
     idx = df_all.loc[mask, date_col].idxmax()
     return float(df_all.loc[idx, col]), pd.to_datetime(df_all.loc[idx, date_col])
 
-# 最新値の取得
+# 最新値
 btc_usd_latest, _      = latest_value(df, col_btc_price_usd)
 btc_jpy_man_latest, _  = latest_value(df, col_btc_price_jpy_man)
 btc_jpy_latest         = (btc_jpy_man_latest * 10000.0) if np.isfinite(btc_jpy_man_latest) else np.nan
 stock_price_latest, _  = latest_value(df, stock_col)
 
-def _fmt_money(v, unit):
-    return f"{unit}{v:,.0f}" if (v is not None and np.isfinite(v)) else ""
+# baseline_price_yen がNaNでも落ちないように保険
+bpe = baseline_price_yen if (baseline_price_yen is not None and np.isfinite(baseline_price_yen)) else np.nan
 
-# 表データを作成（2行：Bitcoin価格／株価）
-metrics_rows = []
+# 箇条書きテキスト
+headline_lines = []
 if np.isfinite(btc_usd_latest) or np.isfinite(btc_jpy_latest):
-    metrics_rows.append({
-        "項目": "Bitcoin価格",
-        "USD": _fmt_money(btc_usd_latest, "$"),
-        "JPY": _fmt_money(btc_jpy_latest, "¥"),
-        "mNAV=1": ""
-    })
-if np.isfinite(stock_price_latest) or np.isfinite(baseline_price_yen):
-    metrics_rows.append({
-        "項目": "株価",
-        "USD": "",
-        "JPY": _fmt_money(stock_price_latest, "¥"),
-        "mNAV=1": _fmt_money(baseline_price_yen, "¥")
-    })
+    line = "・Bitcoin価格: "
+    if np.isfinite(btc_usd_latest):
+        line += f"${btc_usd_latest:,.0f}"
+    if np.isfinite(btc_jpy_latest):
+        line += f"（¥{btc_jpy_latest:,.0f}）"
+    headline_lines.append(line)
 
-metrics_df = pd.DataFrame(metrics_rows, columns=["項目", "USD", "JPY", "mNAV=1"])
-# markdown文字列は later（READMEブロック組み立て時）に _to_markdown_safe(metrics_df) で生成
+if np.isfinite(stock_price_latest) or np.isfinite(bpe):
+    line = "・株価: "
+    if np.isfinite(stock_price_latest):
+        line += f"¥{stock_price_latest:,.0f}"
+    if np.isfinite(bpe):
+        line += f"（mNAV=1: ¥{bpe:,.0f}）"
+    headline_lines.append(line)
 
+# GitHubで確実に改行されるように "  \n"（行末2スペース＋改行）で連結
+headline_md = "  \n".join(headline_lines) if headline_lines else ""
 
 # ================== log10(株価) データ & 回帰（Method B 用） ==================
 def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man):
