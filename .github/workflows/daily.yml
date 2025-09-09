@@ -2,13 +2,12 @@ name: daily-run
 
 on:
   schedule:
-    - cron: '0 14 * * *'   # UTC 14:00 = JST 23:00
+    - cron: '0 8 * * *'   # 08:00 UTC = 17:00 JST
   workflow_dispatch:
 
 permissions:
-  contents: write    
-  pages: write       
-  id-token: write    
+  contents: read
+  id-token: write
 
 jobs:
   run:
@@ -20,7 +19,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Chrome（Selenium用）
+      # main.py が Selenium を使う場合のみ
       - uses: browser-actions/setup-chrome@v1
 
       - name: Install deps
@@ -28,34 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # SA JSON をファイル化
       - name: Write service account json
-        run: |
-          echo '${{ secrets.GSA_JSON }}' > service_account.json
+        run: echo '${{ secrets.GSA_JSON }}' > service_account.json
 
-      - name: Run legacy main.py (update sheet first)
+      - name: Run main.py (update sheet)
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
           KEY_PATH: service_account.json
-          CHROME_PATH: ${{ env.CHROME_PATH }}  # setup-chrome が設定していれば拾う
-          GSA_JSON: ${{ secrets.GSA_JSON }} 
-        run: |
-          python main.py
-
-      - name: Build report (generate docs/ & assets/)
-        env:
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          WORKSHEET_NAME: ${{ secrets.WORKSHEET_NAME }}
-          KEY_PATH: service_account.json
-          CHROME_PATH: ${{ env.CHROME_PATH }}  # setup-chrome が設定
-        run: |
-          python generate_mNAV_graph.py
-
-      - name: Commit and push docs
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs assets README.md || true
-          git commit -m "Update docs by Actions" || echo "nothing to commit"
-          git push
+          CHROME_PATH: ${{ env.CHROME_PATH }}
+          GSA_JSON: ${{ secrets.GSA_JSON }}
+        run: python main.py
