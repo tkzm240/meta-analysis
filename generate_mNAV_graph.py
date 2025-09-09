@@ -195,8 +195,7 @@ if np.isfinite(stock_price_latest) or np.isfinite(baseline_price_yen):
         line += f"（mNAV=1: ¥{baseline_price_yen:,.0f}）"
     headline_lines.append(line)
 
-headline_md = "\n".join(headline_lines) if headline_lines else ""
-
+headline_md = "  \n".join(headline_lines) if headline_lines else ""
 
 # ================== log10(株価) データ & 回帰（Method B 用） ==================
 def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man):
@@ -696,6 +695,7 @@ charts_md = "\n\n".join(chart_blocks)
 block = (
     f"**Last update (JST):** {ts}\n\n"
     f"### Summary\n{summary_md}\n\n"
+    f"{headline_md}\n\n"
     f"### Charts\n{charts_md}"
 )
 
@@ -703,11 +703,7 @@ block = (
 readme_path  = "README.md"
 start_marker = "<!--REPORT:START-->"
 end_marker   = "<!--REPORT:END-->"
-preface = (
-    "# meta-analysis\n\n"
-    f"{headline_md}\n\n"
-    "Meta analytics scraper\n"
-)
+preface = "# meta-analysis\n\n"
 
 
 new_readme = f"{preface}\n{start_marker}\n{block}\n{end_marker}\n"
