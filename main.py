@@ -230,11 +230,11 @@ def run():
         ws.update('A1', [header + needed_headers[len(header):]])
 
     # ----- 追記 -----
-    next_row = len(ws.get_all_values()) + 1
+    formula_mnav = '=IFERROR((INDEX(G:G, ROW()) + INDEX(I:I, ROW())) / INDEX(H:H, ROW()), "")'
     row = [
         date_str, time_val, btc_holdings, btc_per_1000, share_price, btc_price_usd,
         market_cap, btc_nav, debt,
-        f'=IFERROR((G{next_row} + I{next_row}) / H{next_row},"")',
+        formula_mnav,
         mnav, btc_price_jpy_for_sheet, usd_jpy_manual, shares_outstanding_oku
     ]
     ws.append_row(row, value_input_option="USER_ENTERED")
