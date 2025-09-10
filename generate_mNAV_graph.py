@@ -1,7 +1,10 @@
 # generate_mNAV_graph.py
 # README に「Summary表 → 図4枚（各図リンク付）」のみを書き出し、docs/ にインタラクティブ図を保存
+# 変更点：
+# - Bitcoin価格（USD/JPY）と株価（JPY）は Metaplanet 公式サイトから直接スクレイピングして headline に採用
+# - 取得に失敗した場合は従来どおりシートの最新値を使用（フォールバック）
 
-import os, re
+import os, re, time
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -18,25 +21,31 @@ from google.oauth2.service_account import Credentials
 # ===== 解析パッケージ =====
 import statsmodels.api as sm
 
+# ===== Selenium（サイトから最新値を取得するため追加） =====
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+
 # ================== 設定（Actions から環境変数で上書き可） ==================
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1OdhLsAZYVsFz5xcGeuuiuH7JoYyzz6AaG0j2A9Jw1_4")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
 KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
+PAGES_URL      = os.getenv("PAGES_URL", "https://tkzm240.github.io/meta-analysis")
+FETCH_FROM_SITE = os.getenv("FETCH_FROM_SITE", "1")  # "1" のときサイトから取得を試みる
 
 # 強調する q（代表線）
 HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
 HILO_MAX = float(os.getenv("HILO_MAX", 0.98))
 
-# 背景グラデーション帯のqレンジ（★追加）
+# 背景グラデーション帯（qレンジ）
 Q_MIN_SHADE = float(os.getenv("Q_MIN_SHADE", "0.005"))
 Q_MAX_SHADE = float(os.getenv("Q_MAX_SHADE", "0.995"))
 
 # 騰落率ライン（％）
-UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))   # 例：+100%
-LOWER_ERR = float(os.getenv("RELERR_LOWER", "-50"))   # 例：-50%
-
-# GitHub Pages ルートURL
-PAGES_URL = os.getenv("PAGES_URL", "https://tkzm240.github.io/meta-analysis")
+UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))  # 例：+100%
+LOWER_ERR = float(os.getenv("RELERR_LOWER", "-50"))  # 例：-50%
 
 # ================== Google Sheets 読み込み ==================
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
@@ -66,7 +75,7 @@ date_col              = next((c for c in df.columns if str(c).strip().lower()=="
 candidate_stock_cols = [c for c in df.columns if ('株価' in str(c)) or ('share' in str(c).lower() and 'price' in str(c).lower())]
 stock_col = candidate_stock_cols[0] if candidate_stock_cols else None
 
-# ================== クリーニング ==================
+# ================== クリーニング（シート用） ==================
 def clean_numeric_series(s: pd.Series):
     s = pd.Series(s).astype(str).str.strip()
     s = s.replace(['-', '—', '–', '', 'N/A', 'NA', '#N/A', '#VALUE!', '#DIV/0!', 'nan', 'None'], np.nan)
@@ -118,13 +127,12 @@ pt_usd = latest_star(df, "BTCNAV1000_USD")
 pt_jpy = latest_star(df, "BTCNAV1000_JPY")
 
 # ================== 分位点回帰 ==================
-# 0.02 と 0.98 を追加
 base_quantiles = sorted(set(
     [0.01, 0.02, 0.03, 0.05] +
-    [round(q, 2) for q in np.arange(0.10, 1.00, 0.10)] +  # 0.10, 0.20, ... 0.90
+    [round(q, 2) for q in np.arange(0.10, 1.00, 0.10)] +
     [0.95, 0.97, 0.98, 0.99]
 ))
-quantiles = base_quantiles[:]  # hover/表 用
+quantiles = base_quantiles[:]
 
 def fit_quantiles(d, q_list):
     if d is None or len(d)==0: return {}
@@ -156,6 +164,113 @@ def compute_baseline_price_yen(df_all, mnav_col, stock_col_name):
 
 baseline_price_yen, baseline_idx = compute_baseline_price_yen(df, col_mnav, stock_col)
 
+# ================== （追加）サイトから最新の Bitcoin価格 / 株価 を取得 ==================
+CARD_TITLES = {
+    "Bitcoin Price": ["Bitcoin Price", "BTC価格"],
+    "Share Price": ["Share Price", "株価"],
+}
+
+def _build_card_xpath(names):
+    parts = [f".//*[normalize-space(text())='{n}']" for n in names]
+    return " | ".join([f"//div[contains(@class,'rounded') and ({p})]" for p in parts])
+
+def _find_card(driver, wait, card_name):
+    names = CARD_TITLES.get(card_name, [card_name])
+    xpath = _build_card_xpath(names)
+    return wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+
+def _click_currency(driver, wait, card_name, symbol):
+    try:
+        card = _find_card(driver, wait, card_name)
+        driver.execute_script("arguments[0].scrollIntoView();", card)
+        time.sleep(0.3)
+        btn = card.find_element(By.XPATH, f".//button[normalize-space(text())='{symbol}']")
+        btn.click()
+        WebDriverWait(driver, 5).until(lambda d: symbol in card.text)
+    except Exception:
+        pass
+
+def _extract_card_value(driver, wait, card_name):
+    try:
+        card = _find_card(driver, wait, card_name)
+        driver.execute_script("arguments[0].scrollIntoView();", card)
+        time.sleep(0.2)
+        txt = card.text
+        # $ / ¥ を含む数値（K/M/B対応）
+        m = re.search(r"(?:[$¥]\s*)\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:[KMB])?", txt)
+        return m.group(0).replace(" ", "") if m else None
+    except Exception:
+        return None
+
+def _usd_to_float(val):
+    # "$112,371" / "$110.9K" / "$1.23M" -> float(USD)
+    try:
+        s = val.replace("$","").replace(",","").strip().lower()
+        mult = 1.0
+        if s.endswith("k"): mult, s = 1_000, s[:-1]
+        elif s.endswith("m"): mult, s = 1_000_000, s[:-1]
+        elif s.endswith("b"): mult, s = 1_000_000_000, s[:-1]
+        return float(s) * mult
+    except Exception:
+        return None
+
+def _jpy_to_float(val):
+    # "¥714.00" / "¥16.61M" -> 円
+    try:
+        s = val.replace("¥","").replace(",","").strip().lower()
+        mult = 1.0
+        if s.endswith("k"): mult, s = 1_000, s[:-1]
+        elif s.endswith("m"): mult, s = 1_000_000, s[:-1]
+        elif s.endswith("b"): mult, s = 1_000_000_000, s[:-1]
+        return float(s) * mult
+    except Exception:
+        return None
+
+def fetch_site_latest_values(enable=True):
+    """Metaplanet公式から Bitcoin Price(USD/JPY) と Share Price(JPY) を取得。失敗時は None を返す。"""
+    if not enable:
+        return {"btc_usd": None, "btc_jpy": None, "share_jpy": None}
+    try:
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        chrome_path = os.environ.get("CHROME_PATH")
+        if chrome_path:
+            options.binary_location = chrome_path
+
+        driver = webdriver.Chrome(options=options)
+        wait = WebDriverWait(driver, 20)
+        driver.get("https://metaplanet.jp/en/analytics")
+
+        # Bitcoin Price USD
+        _click_currency(driver, wait, "Bitcoin Price", "$")
+        btc_usd_text = _extract_card_value(driver, wait, "Bitcoin Price")
+
+        # Bitcoin Price JPY
+        _click_currency(driver, wait, "Bitcoin Price", "¥")
+        btc_jpy_text = _extract_card_value(driver, wait, "Bitcoin Price")
+
+        # Share Price JPY（明示的に¥を押しておく）
+        _click_currency(driver, wait, "Share Price", "¥")
+        share_jpy_text = _extract_card_value(driver, wait, "Share Price")
+
+        driver.quit()
+
+        return {
+            "btc_usd": _usd_to_float(btc_usd_text) if btc_usd_text else None,
+            "btc_jpy": _jpy_to_float(btc_jpy_text)  if btc_jpy_text  else None,
+            "share_jpy": _jpy_to_float(share_jpy_text) if share_jpy_text else None,
+        }
+    except Exception:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        return {"btc_usd": None, "btc_jpy": None, "share_jpy": None}
+
+site_vals = fetch_site_latest_values(FETCH_FROM_SITE == "1")
+
 # ===== README用：箇条書きメトリクス（Bitcoin価格／株価） =====
 def latest_value(df_all, col):
     """dateが最大の行の値を返す（NaNは除外）。"""
@@ -167,29 +282,34 @@ def latest_value(df_all, col):
     idx = df_all.loc[mask, date_col].idxmax()
     return float(df_all.loc[idx, col]), pd.to_datetime(df_all.loc[idx, date_col])
 
-# 最新値
-btc_usd_latest, _      = latest_value(df, col_btc_price_usd)
-btc_jpy_man_latest, _  = latest_value(df, col_btc_price_jpy_man)
-btc_jpy_latest         = (btc_jpy_man_latest * 10000.0) if np.isfinite(btc_jpy_man_latest) else np.nan
-stock_price_latest, _  = latest_value(df, stock_col)
+# シートの最新値（フォールバック用）
+btc_usd_sheet, _     = latest_value(df, col_btc_price_usd)
+btc_jpy_man_sheet, _ = latest_value(df, col_btc_price_jpy_man)
+btc_jpy_sheet        = (btc_jpy_man_sheet * 10000.0) if np.isfinite(btc_jpy_man_sheet) else np.nan
+stock_price_sheet, _ = latest_value(df, stock_col)
+
+# headline に使う表示値（サイト優先 → シート）
+btc_usd_disp   = site_vals["btc_usd"]   if site_vals["btc_usd"]   is not None else btc_usd_sheet
+btc_jpy_disp   = site_vals["btc_jpy"]   if site_vals["btc_jpy"]   is not None else btc_jpy_sheet
+stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None else stock_price_sheet
 
 # baseline_price_yen がNaNでも落ちないように保険
 bpe = baseline_price_yen if (baseline_price_yen is not None and np.isfinite(baseline_price_yen)) else np.nan
 
 # 箇条書きテキスト
 headline_lines = []
-if np.isfinite(btc_usd_latest) or np.isfinite(btc_jpy_latest):
+if np.isfinite(btc_usd_disp) or np.isfinite(btc_jpy_disp):
     line = "・Bitcoin価格: "
-    if np.isfinite(btc_usd_latest):
-        line += f"${btc_usd_latest:,.0f}"
-    if np.isfinite(btc_jpy_latest):
-        line += f"（¥{btc_jpy_latest:,.0f}）"
+    if np.isfinite(btc_usd_disp):
+        line += f"${btc_usd_disp:,.0f}"
+    if np.isfinite(btc_jpy_disp):
+        line += f"（¥{btc_jpy_disp:,.0f}）"
     headline_lines.append(line)
 
-if np.isfinite(stock_price_latest) or np.isfinite(bpe):
+if np.isfinite(stock_yen_disp) or np.isfinite(bpe):
     line = "・株価: "
-    if np.isfinite(stock_price_latest):
-        line += f"¥{stock_price_latest:,.0f}"
+    if np.isfinite(stock_yen_disp):
+        line += f"¥{stock_yen_disp:,.0f}"
     if np.isfinite(bpe):
         line += f"（mNAV=1: ¥{bpe:,.0f}）"
     headline_lines.append(line)
@@ -197,7 +317,7 @@ if np.isfinite(stock_price_latest) or np.isfinite(bpe):
 # GitHubで確実に改行されるように "  \n"（行末2スペース＋改行）で連結
 headline_md = "  \n".join(headline_lines) if headline_lines else ""
 
-# ================== log10(株価) データ & 回帰（Method B 用） ==================
+# ================== 以降は従来どおり（図・テーブル生成） ==================
 def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man):
     if stock_col is None:
         return pd.DataFrame()
@@ -388,9 +508,9 @@ def make_plot_axis(axis_name, d, qlines, star_pt, colorscale="Turbo",
     ))
 
     add_smooth_gradient_bands(
-    fig, xg, preds_grid,
-    q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE,
-    colorscale=colorscale, alpha=0.22, dense_n=80)
+        fig, xg, preds_grid,
+        q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE,
+        colorscale=colorscale, alpha=0.22, dense_n=80)
 
     LINE_COLORS = get_line_colors(hilo_min, hilo_max)
     for q in highlights:
@@ -482,9 +602,9 @@ def make_plot_axis_price_log(d, qlines, star_pt, colorscale="Turbo",
     ))
 
     add_smooth_gradient_bands_log(
-    fig, xg, preds_grid_log,
-    q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE, num=120,
-    colorscale=colorscale, alpha=0.24)
+        fig, xg, preds_grid_log,
+        q_min=Q_MIN_SHADE, q_max=Q_MAX_SHADE, num=120,
+        colorscale=colorscale, alpha=0.24)
 
     LINE_COLORS = get_line_colors(hilo_min, hilo_max)
     for q in highlights:
@@ -663,7 +783,6 @@ for item in figs:
 for item in figs:
     item["fig"].write_html(item["html"], include_plotlyjs="cdn", full_html=True)
 
-
 # ===== Summary（表）→ Markdown 作成 =====
 def _to_markdown_safe(df_in):
     try:
@@ -674,7 +793,6 @@ def _to_markdown_safe(df_in):
 _df_src    = df_summary_disp if isinstance(df_summary_disp, pd.DataFrame) else pd.DataFrame([{"Message":"(no data)"}])
 summary_md = _to_markdown_safe(_df_src)
 
-os.makedirs("assets", exist_ok=True)
 with open("assets/summary.md", "w", encoding="utf-8") as f:
     f.write(summary_md)
 
@@ -691,30 +809,25 @@ for i, item in enumerate(figs, start=1):
     )
 charts_md = "\n\n".join(chart_blocks)
 
-# README に入れる本文
+# README 本文
 block = (
     f"**Last update (JST):** {ts}\n\n"
     f"### Summary\n"
-    f"{headline_md}\n\n"   # ← 箇条書き（"  \n" で強制改行済み）
-    f"{summary_md}\n\n"    # ← その下にテーブル
+    f"{headline_md}\n\n"
+    f"{summary_md}\n\n"
     f"### Charts\n{charts_md}"
 )
 
-# ===== README を「完全に」再生成（先頭の見出しも固定）=====
+# ===== README を再生成 =====
 readme_path  = "README.md"
 start_marker = "<!--REPORT:START-->"
 end_marker   = "<!--REPORT:END-->"
 preface = "# meta-analysis\n\n"
 
-
 new_readme = f"{preface}\n{start_marker}\n{block}\n{end_marker}\n"
-
 with open(readme_path, "w", encoding="utf-8") as f:
     f.write(new_readme)
-print("README overwritten.")  # ← これがログに出ていれば上書き成功
-
-
-
+print("README overwritten.")
 
 # ================== モバイル用ダッシュボード（docs/index.html） ==================
 def _safe_html_table(df_in):
