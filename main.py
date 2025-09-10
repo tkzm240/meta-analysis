@@ -88,6 +88,17 @@ def clean_number(val):
     except Exception:
         return None
 
+def clean_btc_usd_from_k(val):
+    try:
+        s = val.replace("$","").replace(",","").strip().lower()
+        if s.endswith("k"):
+            return float(s[:-1]) * 1_000
+        if s.endswith("m"):
+            return float(s[:-1]) * 1_000_000
+        return float(s)
+    except Exception:
+        return None
+
 def clean_btc_jpy_from_M(val):
     try:
         s = val.replace("¥","").replace(",","").strip()
@@ -150,7 +161,7 @@ def run():
     btc_holdings  = clean_number(results.get("BTC Holdings") or "")
     btc_per_1000  = clean_number(results.get("Bitcoin per 1,000 Shares") or "")
     share_price   = clean_number(results.get("Share Price") or "")
-    btc_price_usd = clean_number(results.get("Bitcoin Price") or "")
+    btc_price_usd = clean_btc_usd_from_k(results.get("Bitcoin Price") or "")
     market_cap    = clean_number(results.get("Market Cap") or "")
     btc_nav       = clean_number(results.get("Bitcoin NAV") or "")
     debt          = clean_number(results.get("Debt Outstanding") or "")
