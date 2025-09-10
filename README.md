@@ -2,7 +2,7 @@
 
 
 <!--REPORT:START-->
-**Last update (JST):** 2025-09-10 12:08 (UTC+09:00)
+**Last update (JST):** 2025-09-10 13:37 (UTC+09:00)
 
 ### Summary
 ・Bitcoin価格: $110,902（¥16,510,000）  
