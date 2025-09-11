@@ -1,4 +1,4 @@
-# generate_mNAV_graph.py
+買いターゲット# generate_mNAV_graph.py
 # README に「Summary表 → 図4枚（各図リンク付）」のみを書き出し、docs/ にインタラクティブ図を保存
 # 変更点：
 # - Bitcoin価格（USD/JPY）と株価（JPY）は Metaplanet 公式サイトから直接スクレイピングして headline に採用
@@ -497,8 +497,8 @@ if np.isfinite(weekly_rsi):
 if np.isfinite(dev_pct):
     signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
 signals_lines.append(
-    f"・Signal: {signal_emoji} {signal_txt} "
-    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt} "
+    f"・Signal: {signal_emoji} {signal_txt}  \n"
+    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt}  \n"
     f"｜売りライン(q=0.95/0.97/0.98): {sell_prices_txt}"
 )
 signals_md = "  \n".join(signals_lines)
