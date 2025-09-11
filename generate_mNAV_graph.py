@@ -179,51 +179,47 @@ def latest_mnav_deviation_pct(df_jpy, qlines):
 
 # === 週足RSI(14)（Wilder）。週の途中は override_today をその週の最後の値として暫定計算 ===
 def compute_weekly_rsi_14_from_sheet(date_series, close_series, override_today=np.nan):
-    import numpy as np, pandas as pd
-    s = pd.Series(pd.to_numeric(close_series, errors="coerce").values,
-                  index=pd.to_datetime(date_series, errors="coerce")).dropna()
-
-    # まず土日を除外
-    s = s[s.index.weekday < 5]
-
-    # 祝日・年末年始を除外（jpholiday があれば）
+    """
+    date_series: シートの Date 列
+    close_series: シートの株価（終値）列
+    override_today: 週の途中で使う“暫定の現在株価”（NaNなら未使用）
+    戻り値: (最新RSI(float), is_provisional(bool))
+    """
     try:
-        import jpholiday
-        def is_tse_closed(dt):
-            d = dt.date()
-            # 祝日
-            if jpholiday.is_holiday(d):
-                return True
-            # 年末年始（TSE休場の簡易ルール）
-            if (d.month == 1 and d.day <= 3) or (d.month == 12 and d.day == 31):
-                return True
-            return False
+        s = pd.Series(pd.to_numeric(close_series, errors="coerce").values,
+                      index=pd.to_datetime(date_series, errors="coerce")).dropna()
 
-        s = s[~s.index.map(is_tse_closed)]
+        # 平日のみ & 日付に正規化（00:00:00）
+        s = s[s.index.weekday < 5]
+        s.index = s.index.normalize()
+
+        is_prov = False
+        if np.isfinite(override_today):
+            # ← ここが修正ポイント（tz-awareへの tz_localize をやめる）
+            now_jst = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
+            s.loc[now_jst] = float(override_today)
+            is_prov = (now_jst.weekday() != 4)  # 金曜以外は暫定
+
+        # 同日重複があれば“最後の値”を採用
+        s = s.sort_index()
+        s = s[~s.index.duplicated(keep='last')]
+
+        # 週足：金曜終値（祝日で金曜休み → その週の最終取引日）
+        w = s.resample("W-FRI").last().dropna()
+        if len(w) < 15:    # 14期間＋初期化
+            return np.nan, is_prov
+
+        delta = w.diff()
+        gain  = delta.clip(lower=0.0)
+        loss  = -delta.clip(upper=0.0)
+        n = 14
+        avg_gain = gain.ewm(alpha=1/n, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/n, adjust=False).mean()
+        rs  = avg_gain / avg_loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        return float(rsi.iloc[-1]), is_prov
     except Exception:
-        pass  # 未インストールならスキップ（ふだんはデータ側が休場日を持っていない想定）
-
-    # 週途中の暫定上書き（任意）
-    is_prov = False
-    if np.isfinite(override_today):
-        now_jst = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Asia/Tokyo").normalize().tz_localize(None)
-        s.loc[now_jst] = float(override_today)
-        is_prov = (now_jst.weekday() != 4)
-
-    # 週足（金曜終値ベース。祝日で金曜休みでも、その週の最終取引日が採用される）
-    w = s.sort_index().resample("W-FRI").last().dropna()
-    if len(w) < 15:
-        return np.nan, is_prov
-
-    delta = w.diff()
-    up = delta.clip(lower=0.0)
-    dn = -delta.clip(upper=0.0)
-    n = 14
-    avg_up = up.ewm(alpha=1/n, adjust=False).mean()
-    avg_dn = dn.ewm(alpha=1/n, adjust=False).mean()
-    rs = avg_up / avg_dn.replace(0, np.nan)
-    rsi = 100 - (100/(1+rs))
-    return float(rsi.iloc[-1]), is_prov
+        return np.nan, False
 
 # ================== （追加）サイトから最新の Bitcoin価格 / 株価 を取得 ==================
 CARD_TITLES = {
