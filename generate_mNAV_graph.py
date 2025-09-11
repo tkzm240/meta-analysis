@@ -1,4 +1,4 @@
-買いターゲット# generate_mNAV_graph.py
+# generate_mNAV_graph.py
 # README に「Summary表 → 図4枚（各図リンク付）」のみを書き出し、docs/ にインタラクティブ図を保存
 # 変更点：
 # - Bitcoin価格（USD/JPY）と株価（JPY）は Metaplanet 公式サイトから直接スクレイピングして headline に採用
