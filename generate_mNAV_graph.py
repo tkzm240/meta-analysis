@@ -280,20 +280,35 @@ def compute_weekly_rsi_14_from_sheet(date_series, close_series,
         return np.nan, False
 
 # === 現在の x_log における「q毎の予測株価(¥)リスト」を取得（MethodB優先, Aへフォールバック） ===
-def quantile_prices_at_current(q_list, preds_logp_now, preds_mnav_now, baseline_price_yen):
+# === 現在の x_log における「q毎の予測株価(¥)」: mNAV優先 ===
+def quantile_prices_at_current(q_list, preds_logp_now, preds_mnav_now, baseline_price_yen, prefer="mnav"):
     out = []
+    prefer = (prefer or "mnav").lower()
+
+    def from_mnav(qk):
+        if (preds_mnav_now is not None and qk in preds_mnav_now
+                and np.isfinite(preds_mnav_now[qk]) and np.isfinite(baseline_price_yen)):
+            return float(preds_mnav_now[qk]) * float(baseline_price_yen)
+        return np.nan
+
+    def from_price(qk):
+        if preds_logp_now is not None and qk in preds_logp_now and np.isfinite(preds_logp_now[qk]):
+            return 10 ** float(preds_logp_now[qk])
+        return np.nan
+
     for q in q_list:
         qk = float(f"{q:.2f}")
-        v = np.nan
-        # Method B: 価格回帰（優先）
-        if preds_logp_now is not None and qk in preds_logp_now and np.isfinite(preds_logp_now[qk]):
-            v = 10 ** float(preds_logp_now[qk])
-        # Method A: mNAV回帰→価格換算（フォールバック）
-        elif (preds_mnav_now is not None and qk in preds_mnav_now and
-              np.isfinite(preds_mnav_now[qk]) and np.isfinite(baseline_price_yen)):
-            v = float(preds_mnav_now[qk]) * float(baseline_price_yen)
+        if prefer == "mnav":
+            v = from_mnav(qk)
+            if not np.isfinite(v):
+                v = from_price(qk)
+        else:
+            v = from_price(qk)
+            if not np.isfinite(v):
+                v = from_mnav(qk)
         out.append(v if np.isfinite(v) else np.nan)
     return out
+
 
 def fmt_price_list_yen(vals):
     return " / ".join([ (f"¥{v:,.0f}" if np.isfinite(v) else "—") for v in vals ])
@@ -568,7 +583,7 @@ if np.isfinite(dev_pct):
     signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
 signals_lines.append(
     f"・Signal: {signal_emoji} {signal_txt}  \n"
-    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt}  \n"
+    f"｜買いライン(q=0.05/0.03/0.02): {buy_prices_txt}  \n"
     f"｜売りライン(q=0.95/0.97/0.98): {sell_prices_txt}"
 )
 signals_md = "  \n".join(signals_lines)
