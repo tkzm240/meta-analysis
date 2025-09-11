@@ -34,6 +34,8 @@ WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
 KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 PAGES_URL      = os.getenv("PAGES_URL", "https://tkzm240.github.io/meta-analysis")
 FETCH_FROM_SITE = os.getenv("FETCH_FROM_SITE", "1")  # "1" のときサイトから取得を試みる
+RSI_METHOD = os.getenv("RSI_METHOD", "cutler").lower()          # "cutler" or "wilder"
+RSI_INCLUDE_CURR_WEEK = os.getenv("RSI_INCLUDE_CURR_WEEK", "0") # "1": 今週の暫定値も含める
 
 # 強調する q（代表線）
 HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
@@ -177,42 +179,103 @@ def latest_mnav_deviation_pct(df_jpy, qlines):
     except Exception:
         return np.nan
 
-# === 週足RSI(14)（Wilder）。週の途中は override_today をその週の最後の値として暫定計算 ===
-def compute_weekly_rsi_14_from_sheet(date_series, close_series, override_today=np.nan):
+# === 週足RSI(14)：Cutler/Wilder 両対応（SBIに合わせるなら "cutler" 推奨） ===
+def _rsi_wilder_series(close_w: pd.Series, n: int = 14) -> pd.Series:
+    close_w = close_w.dropna().astype(float)
+    if len(close_w) < n + 1:
+        return pd.Series(np.nan, index=close_w.index)
+
+    delta = close_w.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+
+    # 初期平均はSMA
+    ag = gain.rolling(n, min_periods=n).mean()
+    al = loss.rolling(n, min_periods=n).mean()
+
+    rsi = pd.Series(np.nan, index=close_w.index)
+    valid_idx = np.where(~ag.isna() & ~al.isna())[0]
+    if len(valid_idx) == 0:
+        return rsi
+    i0 = valid_idx[0]
+
+    avg_gain = ag.iloc[i0]
+    avg_loss = al.iloc[i0]
+    rs = np.inf if avg_loss == 0 else (avg_gain / avg_loss)
+    rsi.iloc[i0] = 100.0 - 100.0 / (1.0 + rs)
+
+    # Wilder 再帰（平滑）
+    for j in range(i0 + 1, len(close_w)):
+        cg = gain.iloc[j] if not np.isnan(gain.iloc[j]) else 0.0
+        cl = loss.iloc[j] if not np.isnan(loss.iloc[j]) else 0.0
+        avg_gain = (avg_gain * (n - 1) + cg) / n
+        avg_loss = (avg_loss * (n - 1) + cl) / n
+        rs = np.inf if avg_loss == 0 else (avg_gain / avg_loss)
+        rsi.iloc[j] = 100.0 - 100.0 / (1.0 + rs)
+    return rsi
+
+
+def _rsi_cutler_series(close_w: pd.Series, n: int = 14) -> pd.Series:
+    """期間内の上昇幅合計 / (上昇+下落)合計 ×100（Cutler）。日本の証券アプリで一般的。"""
+    close_w = close_w.dropna().astype(float)
+    if len(close_w) < n + 1:
+        return pd.Series(np.nan, index=close_w.index)
+
+    delta = close_w.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+
+    sum_gain = gain.rolling(n, min_periods=n).sum()
+    sum_loss = loss.rolling(n, min_periods=n).sum()
+    denom = (sum_gain + sum_loss).replace(0, np.nan)
+    rsi = 100.0 * (sum_gain / denom)
+    return rsi
+
+
+def compute_weekly_rsi_14_from_sheet(date_series, close_series,
+                                     override_today=np.nan,
+                                     include_current_week=False,
+                                     method: str = "cutler"):
     """
     戻り値: (最新RSI(float), is_provisional(bool))
+    method: "cutler"（推奨・SBIに近い） or "wilder"
+    include_current_week=False なら“完成済み週のみ”（SBIに合わせやすい）
     """
     try:
         s = pd.Series(pd.to_numeric(close_series, errors="coerce").values,
                       index=pd.to_datetime(date_series, errors="coerce")).dropna()
-        # 平日のみ & 日付正規化
+
+        # 平日のみ（0=Mon..4=Fri）。土日除外。祝日はデータが無ければ自然に除外されます。
         s = s[s.index.weekday < 5]
         s.index = s.index.normalize()
-
-        is_prov = False
-        if np.isfinite(override_today):
-            now_jst = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
-            s.loc[now_jst] = float(override_today)
-            is_prov = (now_jst.weekday() != 4)  # 金曜以外は暫定
-
-        # 重複あれば最後を採用
         s = s.sort_index()
-        s = s[~s.index.duplicated(keep='last')]
+        s = s[~s.index.duplicated(keep="last")]
 
-        # 週足（金曜終値ベース。祝日で金曜休み → その週の最終取引日）
+        # JST 今日
+        today = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_convert(None)
+
+        # 今週を暫定で入れる（週途中の暫定株価を使いたい場合）
+        if include_current_week and np.isfinite(override_today):
+            s.loc[today] = float(override_today)
+            s = s.sort_index()
+
+        # 週足：金曜終値ベース。金曜が休みなら、その週の最終営業日の値が“last”になります
         w = s.resample("W-FRI").last().dropna()
-        if len(w) < 15:
-            return np.nan, is_prov
 
-        delta = w.diff()
-        gain  = delta.clip(lower=0.0)
-        loss  = -delta.clip(upper=0.0)
-        n = 14
-        avg_gain = gain.ewm(alpha=1/n, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/n, adjust=False).mean()
-        rs  = avg_gain / avg_loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-        return float(rsi.iloc[-1]), is_prov
+        if not include_current_week:
+            # “完成済み週のみ”に揃える
+            this_week_fri = (today + pd.offsets.Week(weekday=4)).normalize()
+            w = w[w.index < this_week_fri]
+
+        if method.lower() == "wilder":
+            rsi_ser = _rsi_wilder_series(w, n=14)
+        else:
+            rsi_ser = _rsi_cutler_series(w, n=14)
+
+        rsi_ser = rsi_ser.dropna()
+        val = float(rsi_ser.iloc[-1]) if len(rsi_ser) else np.nan
+        is_prov = include_current_week and (today.weekday() != 4)
+        return val, is_prov
     except Exception:
         return np.nan, False
 
@@ -456,9 +519,16 @@ dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
 
 # --- 週足RSI(14)：シート株価から。週途中は headline の株価で暫定上書き ---
 if stock_col is not None:
-    weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(df[date_col], df[stock_col], override_today=stock_yen_disp)
+    weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(
+        df[date_col],
+        df[stock_col],
+        override_today=(stock_yen_disp if RSI_INCLUDE_CURR_WEEK == "1" else np.nan),
+        include_current_week=(RSI_INCLUDE_CURR_WEEK == "1"),
+        method=RSI_METHOD
+    )
 else:
     weekly_rsi, rsi_prov = (np.nan, False)
+
 
 # --- 買い/売りターゲット価格（q=0.05/0.03/0.02 と q=0.95/0.97/0.98） ---
 buy_qs  = [0.05, 0.03, 0.02]
