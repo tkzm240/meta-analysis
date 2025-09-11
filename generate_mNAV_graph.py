@@ -180,33 +180,28 @@ def latest_mnav_deviation_pct(df_jpy, qlines):
 # === 週足RSI(14)（Wilder）。週の途中は override_today をその週の最後の値として暫定計算 ===
 def compute_weekly_rsi_14_from_sheet(date_series, close_series, override_today=np.nan):
     """
-    date_series: シートの Date 列
-    close_series: シートの株価（終値）列
-    override_today: 週の途中で使う“暫定の現在株価”（NaNなら未使用）
     戻り値: (最新RSI(float), is_provisional(bool))
     """
     try:
         s = pd.Series(pd.to_numeric(close_series, errors="coerce").values,
                       index=pd.to_datetime(date_series, errors="coerce")).dropna()
-
-        # 平日のみ & 日付に正規化（00:00:00）
+        # 平日のみ & 日付正規化
         s = s[s.index.weekday < 5]
         s.index = s.index.normalize()
 
         is_prov = False
         if np.isfinite(override_today):
-            # ← ここが修正ポイント（tz-awareへの tz_localize をやめる）
             now_jst = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
             s.loc[now_jst] = float(override_today)
             is_prov = (now_jst.weekday() != 4)  # 金曜以外は暫定
 
-        # 同日重複があれば“最後の値”を採用
+        # 重複あれば最後を採用
         s = s.sort_index()
         s = s[~s.index.duplicated(keep='last')]
 
-        # 週足：金曜終値（祝日で金曜休み → その週の最終取引日）
+        # 週足（金曜終値ベース。祝日で金曜休み → その週の最終取引日）
         w = s.resample("W-FRI").last().dropna()
-        if len(w) < 15:    # 14期間＋初期化
+        if len(w) < 15:
             return np.nan, is_prov
 
         delta = w.diff()
@@ -220,6 +215,25 @@ def compute_weekly_rsi_14_from_sheet(date_series, close_series, override_today=n
         return float(rsi.iloc[-1]), is_prov
     except Exception:
         return np.nan, False
+
+# === 現在の x_log における「q毎の予測株価(¥)リスト」を取得（MethodB優先, Aへフォールバック） ===
+def quantile_prices_at_current(q_list, preds_logp_now, preds_mnav_now, baseline_price_yen):
+    out = []
+    for q in q_list:
+        qk = float(f"{q:.2f}")
+        v = np.nan
+        # Method B: 価格回帰（優先）
+        if preds_logp_now is not None and qk in preds_logp_now and np.isfinite(preds_logp_now[qk]):
+            v = 10 ** float(preds_logp_now[qk])
+        # Method A: mNAV回帰→価格換算（フォールバック）
+        elif (preds_mnav_now is not None and qk in preds_mnav_now and
+              np.isfinite(preds_mnav_now[qk]) and np.isfinite(baseline_price_yen)):
+            v = float(preds_mnav_now[qk]) * float(baseline_price_yen)
+        out.append(v if np.isfinite(v) else np.nan)
+    return out
+
+def fmt_price_list_yen(vals):
+    return " / ".join([ (f"¥{v:,.0f}" if np.isfinite(v) else "—") for v in vals ])
 
 # ================== （追加）サイトから最新の Bitcoin価格 / 株価 を取得 ==================
 CARD_TITLES = {
@@ -353,35 +367,56 @@ stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None el
 # --- 乖離率（Chart3相当：mNAVのq=0.50から） ---
 dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
 
-# --- 週足RSI(14)：シートの株価列から。週途中は headline の株価で暫定計算 ---
+# --- 週足RSI(14)：シート株価から。週途中は headline の株価で暫定上書き ---
 if stock_col is not None:
     weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(df[date_col], df[stock_col], override_today=stock_yen_disp)
 else:
     weekly_rsi, rsi_prov = (np.nan, False)
 
-# --- シグナル判定（ご指定のしきい値） ---
-SELL = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) or (np.isfinite(dev_pct) and dev_pct >= 100)
-WARN = (not SELL) and ( (np.isfinite(weekly_rsi) and weekly_rsi >= 85) or (np.isfinite(dev_pct) and dev_pct >= 95) )
+# --- 買い/売りターゲット価格（q=0.05/0.03/0.02 と q=0.95/0.97/0.98） ---
+buy_qs  = [0.05, 0.03, 0.02]   # 指定順を維持
+sell_qs = [0.95, 0.97, 0.98]
+buy_prices  = quantile_prices_at_current(buy_qs,  preds_logp_now, preds_mnav_at_current, baseline_price_yen)
+sell_prices = quantile_prices_at_current(sell_qs, preds_logp_now, preds_mnav_at_current, baseline_price_yen)
+buy_prices_txt  = fmt_price_list_yen(buy_prices)
+sell_prices_txt = fmt_price_list_yen(sell_prices)
 
-if SELL:
-    signal_txt, signal_emoji = "売り", "🔴"
-elif WARN:
-    signal_txt, signal_emoji = "警戒", "🟠"
+# --- シグナル判定（段階付き）
+#   買い条件: RSI<=50 または 乖離<=-50%
+#   売り条件: RSI>=90 または 乖離>=+100%
+cond_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) or (np.isfinite(dev_pct) and dev_pct <= -50)
+cond_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) or (np.isfinite(dev_pct) and dev_pct >= 100)
+
+# どちらも満たすケースは理論上ほぼ無いが、念のため優先順位：強売/強買 > 売/買 > 中立
+# "強" は各サイド2条件とも満たしたとき
+strong_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) and (np.isfinite(dev_pct) and dev_pct <= -50)
+strong_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) and (np.isfinite(dev_pct) and dev_pct >= 100)
+
+if strong_sell:
+    signal_txt, signal_emoji, signal_rank = "強売り", "🔴", 3
+elif strong_buy:
+    signal_txt, signal_emoji, signal_rank = "強買い", "🟣", 3
+elif cond_sell:
+    signal_txt, signal_emoji, signal_rank = "売り", "🟠", 2
+elif cond_buy:
+    signal_txt, signal_emoji, signal_rank = "買い", "🔵", 2
 else:
-    signal_txt, signal_emoji = "中立", "🟢"
+    signal_txt, signal_emoji, signal_rank = "中立", "🟢", 1
 
 # --- Signals 表示用テキスト ---
 signals_lines = []
 if np.isfinite(weekly_rsi):
     label = "RSI(週足,14)"
-    if rsi_prov:
-        label += "（暫定）"
-    # ざっくりの状態ラベルも添える（任意）
-    rsi_state = "Overbought" if weekly_rsi >= 70 else ("Neutral" if weekly_rsi >= 30 else "Oversold")
-    signals_lines.append(f"・{label}: {weekly_rsi:.1f}（{rsi_state}）")
+    if rsi_prov: label += "（暫定）"
+    signals_lines.append(f"・{label}: {weekly_rsi:.1f}")
 if np.isfinite(dev_pct):
     signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
-signals_lines.append(f"・Signal: {signal_emoji} {signal_txt}（条件: RSI≥90 または 乖離≥+100%）")
+
+signals_lines.append(
+    f"・Signal: {signal_emoji} {signal_txt} "
+    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt} "
+    f"｜売りライン(q=0.95/0.97/0.98): {sell_prices_txt}"
+)
 
 signals_md = "  \n".join(signals_lines)
 
