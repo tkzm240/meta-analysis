@@ -364,6 +364,9 @@ btc_usd_disp   = site_vals["btc_usd"]   if site_vals["btc_usd"]   is not None el
 btc_jpy_disp   = site_vals["btc_jpy"]   if site_vals["btc_jpy"]   is not None else btc_jpy_sheet
 stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None else stock_price_sheet
 
+preds_mnav_at_current = predict_mnav_at_xlog(ql_jpy,   pt_jpy["x_log"]   if pt_jpy   else np.nan, base_quantiles)
+preds_logp_now        = predict_logprice_at_xlog(ql_price, pt_price["x_log"] if pt_price else np.nan, base_quantiles)
+
 # --- 乖離率（Chart3相当：mNAVのq=0.50から） ---
 dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
 
