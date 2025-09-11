@@ -35,7 +35,7 @@ KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 PAGES_URL      = os.getenv("PAGES_URL", "https://tkzm240.github.io/meta-analysis")
 FETCH_FROM_SITE = os.getenv("FETCH_FROM_SITE", "1")  # "1" のときサイトから取得を試みる
 RSI_METHOD = os.getenv("RSI_METHOD", "cutler").lower()          # "cutler" or "wilder"
-RSI_INCLUDE_CURR_WEEK = os.getenv("RSI_INCLUDE_CURR_WEEK", "0") # "1": 今週の暫定値も含める
+RSI_INCLUDE_CURR_WEEK = os.getenv("RSI_INCLUDE_CURR_WEEK", "1") # "1": 今週の暫定値も含める
 
 # 強調する q（代表線）
 HILO_MIN = float(os.getenv("HILO_MIN", 0.02))
