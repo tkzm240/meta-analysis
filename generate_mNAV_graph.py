@@ -364,65 +364,6 @@ btc_usd_disp   = site_vals["btc_usd"]   if site_vals["btc_usd"]   is not None el
 btc_jpy_disp   = site_vals["btc_jpy"]   if site_vals["btc_jpy"]   is not None else btc_jpy_sheet
 stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None else stock_price_sheet
 
-preds_mnav_at_current = predict_mnav_at_xlog(ql_jpy,   pt_jpy["x_log"]   if pt_jpy   else np.nan, base_quantiles)
-preds_logp_now        = predict_logprice_at_xlog(ql_price, pt_price["x_log"] if pt_price else np.nan, base_quantiles)
-
-# --- 乖離率（Chart3相当：mNAVのq=0.50から） ---
-dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
-
-# --- 週足RSI(14)：シート株価から。週途中は headline の株価で暫定上書き ---
-if stock_col is not None:
-    weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(df[date_col], df[stock_col], override_today=stock_yen_disp)
-else:
-    weekly_rsi, rsi_prov = (np.nan, False)
-
-# --- 買い/売りターゲット価格（q=0.05/0.03/0.02 と q=0.95/0.97/0.98） ---
-buy_qs  = [0.05, 0.03, 0.02]   # 指定順を維持
-sell_qs = [0.95, 0.97, 0.98]
-buy_prices  = quantile_prices_at_current(buy_qs,  preds_logp_now, preds_mnav_at_current, baseline_price_yen)
-sell_prices = quantile_prices_at_current(sell_qs, preds_logp_now, preds_mnav_at_current, baseline_price_yen)
-buy_prices_txt  = fmt_price_list_yen(buy_prices)
-sell_prices_txt = fmt_price_list_yen(sell_prices)
-
-# --- シグナル判定（段階付き）
-#   買い条件: RSI<=50 または 乖離<=-50%
-#   売り条件: RSI>=90 または 乖離>=+100%
-cond_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) or (np.isfinite(dev_pct) and dev_pct <= -50)
-cond_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) or (np.isfinite(dev_pct) and dev_pct >= 100)
-
-# どちらも満たすケースは理論上ほぼ無いが、念のため優先順位：強売/強買 > 売/買 > 中立
-# "強" は各サイド2条件とも満たしたとき
-strong_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) and (np.isfinite(dev_pct) and dev_pct <= -50)
-strong_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) and (np.isfinite(dev_pct) and dev_pct >= 100)
-
-if strong_sell:
-    signal_txt, signal_emoji, signal_rank = "強売り", "🔴", 3
-elif strong_buy:
-    signal_txt, signal_emoji, signal_rank = "強買い", "🟣", 3
-elif cond_sell:
-    signal_txt, signal_emoji, signal_rank = "売り", "🟠", 2
-elif cond_buy:
-    signal_txt, signal_emoji, signal_rank = "買い", "🔵", 2
-else:
-    signal_txt, signal_emoji, signal_rank = "中立", "🟢", 1
-
-# --- Signals 表示用テキスト ---
-signals_lines = []
-if np.isfinite(weekly_rsi):
-    label = "RSI(週足,14)"
-    if rsi_prov: label += "（暫定）"
-    signals_lines.append(f"・{label}: {weekly_rsi:.1f}")
-if np.isfinite(dev_pct):
-    signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
-
-signals_lines.append(
-    f"・Signal: {signal_emoji} {signal_txt} "
-    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt} "
-    f"｜売りライン(q=0.95/0.97/0.98): {sell_prices_txt}"
-)
-
-signals_md = "  \n".join(signals_lines)
-
 # baseline_price_yen がNaNでも落ちないように保険
 bpe = baseline_price_yen if (baseline_price_yen is not None and np.isfinite(baseline_price_yen)) else np.nan
 
@@ -506,8 +447,61 @@ pt_price = (lambda d: None if d is None or len(d)==0 else {
     "y": float(d.iloc[-1]["y"]), "btc1000": float(d.iloc[-1]["btc1000"])
 })(df_price)
 
+# ここは pt_price 定義の直後に置く
 preds_mnav_at_current = predict_mnav_at_xlog(ql_jpy,   pt_jpy["x_log"]   if pt_jpy   else np.nan, base_quantiles)
 preds_logp_now        = predict_logprice_at_xlog(ql_price, pt_price["x_log"] if pt_price else np.nan, base_quantiles)
+
+# --- 乖離率（Chart3相当：mNAVのq=0.50から） ---
+dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
+
+# --- 週足RSI(14)：シート株価から。週途中は headline の株価で暫定上書き ---
+if stock_col is not None:
+    weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(df[date_col], df[stock_col], override_today=stock_yen_disp)
+else:
+    weekly_rsi, rsi_prov = (np.nan, False)
+
+# --- 買い/売りターゲット価格（q=0.05/0.03/0.02 と q=0.95/0.97/0.98） ---
+buy_qs  = [0.05, 0.03, 0.02]
+sell_qs = [0.95, 0.97, 0.98]
+buy_prices  = quantile_prices_at_current(buy_qs,  preds_logp_now, preds_mnav_at_current, baseline_price_yen)
+sell_prices = quantile_prices_at_current(sell_qs, preds_logp_now, preds_mnav_at_current, baseline_price_yen)
+buy_prices_txt  = fmt_price_list_yen(buy_prices)
+sell_prices_txt = fmt_price_list_yen(sell_prices)
+
+# --- シグナル判定（段階付き）
+#  買い条件: RSI<=50 または 乖離<=-50%
+#  売り条件: RSI>=90 または 乖離>=+100%
+cond_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) or (np.isfinite(dev_pct) and dev_pct <= -50)
+cond_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) or (np.isfinite(dev_pct) and dev_pct >= 100)
+
+strong_buy  = (np.isfinite(weekly_rsi) and weekly_rsi <= 50) and (np.isfinite(dev_pct) and dev_pct <= -50)
+strong_sell = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) and (np.isfinite(dev_pct) and dev_pct >= 100)
+
+if strong_sell:
+    signal_txt, signal_emoji, signal_rank = "強売り", "🔴", 3
+elif strong_buy:
+    signal_txt, signal_emoji, signal_rank = "強買い", "🟣", 3
+elif cond_sell:
+    signal_txt, signal_emoji, signal_rank = "売り", "🟠", 2
+elif cond_buy:
+    signal_txt, signal_emoji, signal_rank = "買い", "🔵", 2
+else:
+    signal_txt, signal_emoji, signal_rank = "中立", "🟢", 1
+
+# --- Signals 表示用テキスト ---
+signals_lines = []
+if np.isfinite(weekly_rsi):
+    label = "RSI(週足,14)"
+    if rsi_prov: label += "（暫定）"
+    signals_lines.append(f"・{label}: {weekly_rsi:.1f}")
+if np.isfinite(dev_pct):
+    signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
+signals_lines.append(
+    f"・Signal: {signal_emoji} {signal_txt} "
+    f"｜買いターゲット(q=0.05/0.03/0.02): {buy_prices_txt} "
+    f"｜売りライン(q=0.95/0.97/0.98): {sell_prices_txt}"
+)
+signals_md = "  \n".join(signals_lines)
 
 # ================== Summary（比較テーブル） ==================
 def make_combined_price_table(preds_mnav, preds_log10p, baseline_price_y, q_list, currency="¥"):
