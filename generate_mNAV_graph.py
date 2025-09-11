@@ -164,6 +164,67 @@ def compute_baseline_price_yen(df_all, mnav_col, stock_col_name):
 
 baseline_price_yen, baseline_idx = compute_baseline_price_yen(df, col_mnav, stock_col)
 
+# === 最新点の「mNAV の q=0.50 からの乖離率(%)」 ===
+def latest_mnav_deviation_pct(df_jpy, qlines):
+    try:
+        if df_jpy is None or len(df_jpy) == 0 or (0.5 not in qlines):
+            return np.nan
+        a = float(qlines[0.5]["const"]); b = float(qlines[0.5]["log_x"])
+        x = float(df_jpy["log_x"].iloc[-1])
+        y_actual = float(df_jpy["y"].iloc[-1])    # 実測 mNAV
+        y_pred   = 10.0 ** (a + b * x)            # q=0.50 回帰の mNAV
+        return float(100.0 * (y_actual - y_pred) / y_pred)
+    except Exception:
+        return np.nan
+
+# === 週足RSI(14)（Wilder）。週の途中は override_today をその週の最後の値として暫定計算 ===
+def compute_weekly_rsi_14_from_sheet(date_series, close_series, override_today=np.nan):
+    import numpy as np, pandas as pd
+    s = pd.Series(pd.to_numeric(close_series, errors="coerce").values,
+                  index=pd.to_datetime(date_series, errors="coerce")).dropna()
+
+    # まず土日を除外
+    s = s[s.index.weekday < 5]
+
+    # 祝日・年末年始を除外（jpholiday があれば）
+    try:
+        import jpholiday
+        def is_tse_closed(dt):
+            d = dt.date()
+            # 祝日
+            if jpholiday.is_holiday(d):
+                return True
+            # 年末年始（TSE休場の簡易ルール）
+            if (d.month == 1 and d.day <= 3) or (d.month == 12 and d.day == 31):
+                return True
+            return False
+
+        s = s[~s.index.map(is_tse_closed)]
+    except Exception:
+        pass  # 未インストールならスキップ（ふだんはデータ側が休場日を持っていない想定）
+
+    # 週途中の暫定上書き（任意）
+    is_prov = False
+    if np.isfinite(override_today):
+        now_jst = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Asia/Tokyo").normalize().tz_localize(None)
+        s.loc[now_jst] = float(override_today)
+        is_prov = (now_jst.weekday() != 4)
+
+    # 週足（金曜終値ベース。祝日で金曜休みでも、その週の最終取引日が採用される）
+    w = s.sort_index().resample("W-FRI").last().dropna()
+    if len(w) < 15:
+        return np.nan, is_prov
+
+    delta = w.diff()
+    up = delta.clip(lower=0.0)
+    dn = -delta.clip(upper=0.0)
+    n = 14
+    avg_up = up.ewm(alpha=1/n, adjust=False).mean()
+    avg_dn = dn.ewm(alpha=1/n, adjust=False).mean()
+    rs = avg_up / avg_dn.replace(0, np.nan)
+    rsi = 100 - (100/(1+rs))
+    return float(rsi.iloc[-1]), is_prov
+
 # ================== （追加）サイトから最新の Bitcoin価格 / 株価 を取得 ==================
 CARD_TITLES = {
     "Bitcoin Price": ["Bitcoin Price", "BTC価格"],
@@ -292,6 +353,41 @@ stock_price_sheet, _ = latest_value(df, stock_col)
 btc_usd_disp   = site_vals["btc_usd"]   if site_vals["btc_usd"]   is not None else btc_usd_sheet
 btc_jpy_disp   = site_vals["btc_jpy"]   if site_vals["btc_jpy"]   is not None else btc_jpy_sheet
 stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None else stock_price_sheet
+
+# --- 乖離率（Chart3相当：mNAVのq=0.50から） ---
+dev_pct = latest_mnav_deviation_pct(df_jpy, ql_jpy)
+
+# --- 週足RSI(14)：シートの株価列から。週途中は headline の株価で暫定計算 ---
+if stock_col is not None:
+    weekly_rsi, rsi_prov = compute_weekly_rsi_14_from_sheet(df[date_col], df[stock_col], override_today=stock_yen_disp)
+else:
+    weekly_rsi, rsi_prov = (np.nan, False)
+
+# --- シグナル判定（ご指定のしきい値） ---
+SELL = (np.isfinite(weekly_rsi) and weekly_rsi >= 90) or (np.isfinite(dev_pct) and dev_pct >= 100)
+WARN = (not SELL) and ( (np.isfinite(weekly_rsi) and weekly_rsi >= 85) or (np.isfinite(dev_pct) and dev_pct >= 95) )
+
+if SELL:
+    signal_txt, signal_emoji = "売り", "🔴"
+elif WARN:
+    signal_txt, signal_emoji = "警戒", "🟠"
+else:
+    signal_txt, signal_emoji = "中立", "🟢"
+
+# --- Signals 表示用テキスト ---
+signals_lines = []
+if np.isfinite(weekly_rsi):
+    label = "RSI(週足,14)"
+    if rsi_prov:
+        label += "（暫定）"
+    # ざっくりの状態ラベルも添える（任意）
+    rsi_state = "Overbought" if weekly_rsi >= 70 else ("Neutral" if weekly_rsi >= 30 else "Oversold")
+    signals_lines.append(f"・{label}: {weekly_rsi:.1f}（{rsi_state}）")
+if np.isfinite(dev_pct):
+    signals_lines.append(f"・乖離率 (mNAV vs q=0.50): {dev_pct:+.0f}%")
+signals_lines.append(f"・Signal: {signal_emoji} {signal_txt}（条件: RSI≥90 または 乖離≥+100%）")
+
+signals_md = "  \n".join(signals_lines)
 
 # baseline_price_yen がNaNでも落ちないように保険
 bpe = baseline_price_yen if (baseline_price_yen is not None and np.isfinite(baseline_price_yen)) else np.nan
