@@ -910,9 +910,12 @@ block = (
     f"**Last update (JST):** {ts}\n\n"
     f"### Summary\n"
     f"{headline_md}\n\n"
+    f"### Signals\n"
+    f"{signals_md}\n\n"
     f"{summary_md}\n\n"
     f"### Charts\n{charts_md}"
 )
+
 
 # ===== README を再生成 =====
 readme_path  = "README.md"
