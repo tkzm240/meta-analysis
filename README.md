@@ -2,10 +2,10 @@
 
 
 <!--REPORT:START-->
-**Last update (JST):** 2025-10-21 11:27 (UTC+09:00)
+**Last update (JST):** 2025-10-21 12:37 (UTC+09:00)
 
 ### Summary
-・Bitcoin価格: $109,556（¥16,540,000）  
+・Bitcoin価格: $109,506（¥16,550,000）  
 ・株価: ¥426（mNAV=1: ¥431）
 
 ### Signals
