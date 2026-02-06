@@ -2,10 +2,10 @@
 
 
 <!--REPORT:START-->
-**Last update (JST):** 2026-02-06 15:53 (UTC+09:00)
+**Last update (JST):** 2026-02-06 16:45 (UTC+09:00)
 
 ### Summary
-・Bitcoin価格: $65,077（¥10,200,000）  
+・Bitcoin価格: $65,359（¥10,250,000）  
 ・株価: ¥340（mNAV=1: ¥303）
 
 ### Signals
