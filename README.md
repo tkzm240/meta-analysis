@@ -2,7 +2,7 @@
 
 
 <!--REPORT:START-->
-**Last update (JST):** 2026-05-24 18:53 (UTC+09:00)
+**Last update (JST):** 2026-05-25 14:19 (UTC+09:00)
 
 ### Summary
 ・Bitcoin価格: $68（¥10,190,000）  
