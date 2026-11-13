@@ -121,15 +121,30 @@ class SheetTests(unittest.TestCase):
                     n = int(update["range"].split(":")[0][1:]) - 1
                     self.rows[n] = list(update["values"][0])
                     self.rows[n][0] = "2026/11/13"  # Sheets may change date presentation.
+                    # gspread qualifies caller-provided ranges in place.
+                    update["range"] = f"'{self.title}'!{update['range']}"
         ws = Worksheet()
+        class Backup:
+            def __init__(self, title):
+                self.title = title
         class Spreadsheet:
+            def __init__(self):
+                self.sheets = [ws]
             def worksheets(self):
-                return [ws]
+                return self.sheets
             def duplicate_sheet(self, *args, **kwargs):
                 events.append("backup")
-        report = sync_worksheet(Spreadsheet(), ws, [record()])
+                self.sheets.append(Backup(kwargs["new_sheet_name"]))
+        spreadsheet = Spreadsheet()
+        report = sync_worksheet(spreadsheet, ws, [record()])
         self.assertEqual(events, ["backup", "write"])
         self.assertTrue(report["verified"])
+        self.assertEqual(report["backup_sheet"], "data_before_api_recovery")
+        rerun = sync_worksheet(spreadsheet, ws, [record()])
+        self.assertEqual(events, ["backup", "write"])
+        self.assertTrue(rerun["verified"])
+        self.assertEqual(rerun["updated"], 0)
+        self.assertEqual(rerun["backup_sheet"], "data_before_api_recovery")
 
 
 if __name__ == "__main__":

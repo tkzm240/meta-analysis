@@ -1,4 +1,5 @@
 """Date-keyed updates of the legacy A:N table without moving user cells."""
+from copy import deepcopy
 from datetime import datetime, timezone
 import math
 
@@ -107,19 +108,22 @@ def plan_updates(existing, records, force=False):
 def sync_worksheet(spreadsheet, worksheet, records, mode="sync"):
     existing = worksheet.get("A:N", value_render_option="FORMULA", date_time_render_option="FORMATTED_STRING")
     updates, report = plan_updates(existing, records, force=mode == "rebuild")
+    backup_name = worksheet.title[:65] + "_before_api_recovery"
+    titles = {w.title for w in spreadsheet.worksheets()}
+    if backup_name in titles:
+        report["backup_sheet"] = backup_name
     if not updates:
         report["verified"] = True
         return report
     # A single recovery snapshot is retained; never put private sheet copies in artifacts.
-    backup_name = worksheet.title[:65] + "_before_api_recovery"
-    titles = {w.title for w in spreadsheet.worksheets()}
     if report["updated"] and backup_name not in titles:
         spreadsheet.duplicate_sheet(worksheet.id, new_sheet_name=backup_name)
         report["backup_sheet"] = backup_name
     if report["required_rows"] > worksheet.row_count or worksheet.col_count < 14:
         worksheet.resize(rows=max(worksheet.row_count, report["required_rows"]),
                          cols=max(14, worksheet.col_count))
-    worksheet.batch_update(updates, value_input_option="USER_ENTERED")
+    # gspread qualifies each range in-place; keep the local verification plan intact.
+    worksheet.batch_update(deepcopy(updates), value_input_option="USER_ENTERED")
     actual = worksheet.get("A:N", value_render_option="FORMULA", date_time_render_option="FORMATTED_STRING")
     for update in updates:
         n = int(update["range"].split(":")[0][1:]) - 1
