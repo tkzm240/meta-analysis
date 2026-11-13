@@ -1,36 +1,29 @@
 # generate_mNAV_graph.py
 # README に「Summary表 → 図4枚（各図リンク付）」のみを書き出し、docs/ にインタラクティブ図を保存
 # 変更点：
-# - Bitcoin価格（USD/JPY）と株価（JPY）は Metaplanet 公式サイトから直接スクレイピングして headline に採用
-# - 取得に失敗した場合は従来どおりシートの最新値を使用（フォールバック）
+# - Bitcoin価格（USD/JPY）と株価（JPY）は公式データAPIから取得
+# - 取得に失敗した場合は保存データを使用し、そのデータ日を明記
 
-import os, re, time
+import csv
+import json
+import os, re
+from html import escape
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 # ===== Plotly =====
 import plotly.graph_objects as go
-import plotly.io as pio
+import kaleido
 from plotly.colors import sample_colorscale, hex_to_rgb
-
-# ===== Sheets: サービスアカウント認証 =====
-import gspread
-from google.oauth2.service_account import Credentials
+from plotly.offline import get_plotlyjs_version
 
 # ===== 解析パッケージ =====
 import statsmodels.api as sm
 
-# ===== Selenium（サイトから最新値を取得するため追加） =====
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-
 # ================== 設定（Actions から環境変数で上書き可） ==================
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1OdhLsAZYVsFz5xcGeuuiuH7JoYyzz6AaG0j2A9Jw1_4")
-WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "データシート")
+WORKSHEET_NAME = os.getenv("WORKSHEET_NAME") or "データシート"
 KEY_PATH       = os.getenv("KEY_PATH", "service_account.json")
 PAGES_URL      = os.getenv("PAGES_URL", "https://tkzm240.github.io/meta-analysis")
 FETCH_FROM_SITE = os.getenv("FETCH_FROM_SITE", "1")  # "1" のときサイトから取得を試みる
@@ -49,12 +42,25 @@ Q_MAX_SHADE = float(os.getenv("Q_MAX_SHADE", "0.995"))
 UPPER_ERR = float(os.getenv("RELERR_UPPER", "100"))  # 例：+100%
 LOWER_ERR = float(os.getenv("RELERR_LOWER", "-50"))  # 例：-50%
 
-# ================== Google Sheets 読み込み ==================
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_file(KEY_PATH, scopes=SCOPES)
-gc = gspread.authorize(creds)
-ws = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
-raw = ws.get_all_values()
+# ================== Google Sheets / 再取得CSV 読み込み ==================
+data_csv = os.getenv("DATA_CSV")
+if data_csv:
+    with open(data_csv, encoding="utf-8-sig", newline="") as source:
+        raw = list(csv.reader(source))
+else:
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    sa_json = os.getenv("GSA_JSON")
+    if sa_json:
+        creds = Credentials.from_service_account_info(json.loads(sa_json), scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file(KEY_PATH, scopes=scopes)
+    ws = gspread.authorize(creds).open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
+    raw = ws.get_all_values()
+if len(raw) < 4 or len(raw[0]) < 14:
+    raise ValueError("Expected the existing 14-column data schema and at least 3 observations")
 
 # ================== 前処理（重複ヘッダ対応） ==================
 orig = raw[0]
@@ -64,7 +70,7 @@ for h in orig:
         seen[h]+=1; headers.append(f"{h}_{seen[h]}")
     else:
         seen[h]=0; headers.append(h if h else "Unnamed")
-df = pd.DataFrame(raw[1:], columns=headers)
+df = pd.DataFrame([row + [""] * (len(headers) - len(row)) for row in raw[1:]], columns=headers)
 
 # ================== 列の特定（D,F,L,I 想定） ==================
 col_btc_per_1000      = next((c for c in df.columns if ("1000" in str(c) and "BTC" in str(c))), df.columns[3])
@@ -88,13 +94,21 @@ def clean_numeric_series(s: pd.Series):
 def to_float(series: pd.Series) -> pd.Series:
     return pd.to_numeric(clean_numeric_series(series), errors='coerce')
 
-df[date_col]              = pd.to_datetime(df[date_col], errors="coerce")
+df[date_col]              = pd.to_datetime(df[date_col], format="mixed", errors="coerce")
 df[col_mnav]              = to_float(df[col_mnav])
 df[col_btc_per_1000]      = to_float(df[col_btc_per_1000])
 df[col_btc_price_usd]     = to_float(df[col_btc_price_usd])
 df[col_btc_price_jpy_man] = to_float(df[col_btc_price_jpy_man])
 if stock_col is not None:
     df[stock_col] = to_float(df[stock_col])
+# Re-runs can leave multiple physical rows in an existing sheet. A date is one
+# daily observation, so repeated rows must not change regression weighting.
+df = (df.sort_values(date_col, kind="stable", na_position="first")
+      .drop_duplicates(subset=[date_col], keep="last").reset_index(drop=True))
+history_date = df[date_col].max()
+if pd.isna(history_date):
+    raise ValueError("No valid dates in the history; refusing to publish an empty report")
+history_as_of = history_date.strftime("%Y-%m-%d")
 
 # ================== NAV（1000株あたり）計算 ==================
 df["BTCNAV1000_USD"] = df[col_btc_per_1000] * df[col_btc_price_usd]
@@ -104,6 +118,7 @@ df["BTCNAV1000_JPY"] = df[col_btc_per_1000] * (df[col_btc_price_jpy_man] * 10000
 def make_valid(df_all, xcol):
     cols = [date_col, col_mnav, col_btc_per_1000, xcol]
     d = df_all[cols].copy().dropna()
+    d = d[np.isfinite(d[[col_mnav, col_btc_per_1000, xcol]]).all(axis=1)]
     d = d[(d[col_mnav] > 0) & (d[xcol] > 0) & (d[col_btc_per_1000] > 0)]
     d["log_x"]  = np.log10(d[xcol].astype(float))
     d["btc1000"]= d[col_btc_per_1000].astype(float)
@@ -113,9 +128,14 @@ def make_valid(df_all, xcol):
 
 df_usd = make_valid(df, "BTCNAV1000_USD")
 df_jpy = make_valid(df, "BTCNAV1000_JPY")
+if len(df_jpy) < 3 or df_jpy["log_x"].nunique() < 2:
+    raise ValueError("Insufficient valid JPY history for regression; report was not replaced")
+history_as_of = df_jpy[date_col].max().strftime("%Y-%m-%d")
 
 def latest_star(df_all, xcol):
-    mask = df_all[date_col].notna() & df_all[col_mnav].notna() & df_all[xcol].notna() & df_all[col_btc_per_1000].notna()
+    mask = (df_all[date_col].notna()
+            & np.isfinite(df_all[[col_mnav, xcol, col_btc_per_1000]]).all(axis=1)
+            & (df_all[[col_mnav, xcol, col_btc_per_1000]] > 0).all(axis=1))
     if not mask.any(): return None
     idx = df_all.index[mask][-1]
     return {
@@ -151,6 +171,8 @@ def fit_quantiles(d, q_list):
 
 ql_usd = fit_quantiles(df_usd, base_quantiles)
 ql_jpy = fit_quantiles(df_jpy, base_quantiles)
+if 0.5 not in ql_jpy:
+    raise ValueError("Median NAV regression failed; report was not replaced")
 
 # ================== 基準株価（円 / mNAV 1） ==================
 def compute_baseline_price_yen(df_all, mnav_col, stock_col_name):
@@ -234,6 +256,7 @@ def _rsi_cutler_series(close_w: pd.Series, n: int = 14) -> pd.Series:
 
 def compute_weekly_rsi_14_from_sheet(date_series, close_series,
                                      override_today=np.nan,
+                                     override_date=None,
                                      include_current_week=False,
                                      method: str = "cutler"):
     """
@@ -252,11 +275,13 @@ def compute_weekly_rsi_14_from_sheet(date_series, close_series,
         s = s[~s.index.duplicated(keep="last")]
 
         # JST 今日
-        today = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_convert(None)
+        today = pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
 
         # 今週を暫定で入れる（週途中の暫定株価を使いたい場合）
-        if include_current_week and np.isfinite(override_today):
-            s.loc[today] = float(override_today)
+        if include_current_week and np.isfinite(override_today) and override_date is not None:
+            quote_date = pd.Timestamp(override_date).tz_localize(None).normalize()
+            if quote_date.weekday() < 5:
+                s.loc[quote_date] = float(override_today)
             s = s.sort_index()
 
         # 週足：金曜終値ベース。金曜が休みなら、その週の最終営業日の値が“last”になります
@@ -274,7 +299,8 @@ def compute_weekly_rsi_14_from_sheet(date_series, close_series,
 
         rsi_ser = rsi_ser.dropna()
         val = float(rsi_ser.iloc[-1]) if len(rsi_ser) else np.nan
-        is_prov = include_current_week and (today.weekday() != 4)
+        week_start = today - pd.Timedelta(days=today.weekday())
+        is_prov = include_current_week and today.weekday() < 4 and s.index.max() >= week_start
         return val, is_prov
     except Exception:
         return np.nan, False
@@ -313,110 +339,25 @@ def quantile_prices_at_current(q_list, preds_logp_now, preds_mnav_now, baseline_
 def fmt_price_list_yen(vals):
     return " / ".join([ (f"¥{v:,.0f}" if np.isfinite(v) else "—") for v in vals ])
 
-# ================== （追加）サイトから最新の Bitcoin価格 / 株価 を取得 ==================
-CARD_TITLES = {
-    "Bitcoin Price": ["Bitcoin Price", "BTC価格"],
-    "Share Price": ["Share Price", "株価"],
-}
-
-def _build_card_xpath(names):
-    parts = [f".//*[normalize-space(text())='{n}']" for n in names]
-    return " | ".join([f"//div[contains(@class,'rounded') and ({p})]" for p in parts])
-
-def _find_card(driver, wait, card_name):
-    names = CARD_TITLES.get(card_name, [card_name])
-    xpath = _build_card_xpath(names)
-    return wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
-
-def _click_currency(driver, wait, card_name, symbol):
-    try:
-        card = _find_card(driver, wait, card_name)
-        driver.execute_script("arguments[0].scrollIntoView();", card)
-        time.sleep(0.3)
-        btn = card.find_element(By.XPATH, f".//button[normalize-space(text())='{symbol}']")
-        btn.click()
-        WebDriverWait(driver, 5).until(lambda d: symbol in card.text)
-    except Exception:
-        pass
-
-def _extract_card_value(driver, wait, card_name):
-    try:
-        card = _find_card(driver, wait, card_name)
-        driver.execute_script("arguments[0].scrollIntoView();", card)
-        time.sleep(0.2)
-        txt = card.text
-        # $ / ¥ を含む数値（K/M/B対応）
-        m = re.search(r"(?:[$¥]\s*)\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:[KMB])?", txt)
-        return m.group(0).replace(" ", "") if m else None
-    except Exception:
-        return None
-
-def _usd_to_float(val):
-    # "$112,371" / "$110.9K" / "$1.23M" -> float(USD)
-    try:
-        s = val.replace("$","").replace(",","").strip().lower()
-        mult = 1.0
-        if s.endswith("k"): mult, s = 1_000, s[:-1]
-        elif s.endswith("m"): mult, s = 1_000_000, s[:-1]
-        elif s.endswith("b"): mult, s = 1_000_000_000, s[:-1]
-        return float(s) * mult
-    except Exception:
-        return None
-
-def _jpy_to_float(val):
-    # "¥714.00" / "¥16.61M" -> 円
-    try:
-        s = val.replace("¥","").replace(",","").strip().lower()
-        mult = 1.0
-        if s.endswith("k"): mult, s = 1_000, s[:-1]
-        elif s.endswith("m"): mult, s = 1_000_000, s[:-1]
-        elif s.endswith("b"): mult, s = 1_000_000_000, s[:-1]
-        return float(s) * mult
-    except Exception:
-        return None
-
+# ================== 公式APIから価格取得 ==================
 def fetch_site_latest_values(enable=True):
-    """Metaplanet公式から Bitcoin Price(USD/JPY) と Share Price(JPY) を取得。失敗時は None を返す。"""
+    """Return exact numeric API prices, with an explicit source date."""
+    result = {"btc_usd": None, "btc_jpy": None, "share_jpy": None, "as_of_date": None}
     if not enable:
-        return {"btc_usd": None, "btc_jpy": None, "share_jpy": None}
+        return result
     try:
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        chrome_path = os.environ.get("CHROME_PATH")
-        if chrome_path:
-            options.binary_location = chrome_path
-
-        driver = webdriver.Chrome(options=options)
-        wait = WebDriverWait(driver, 20)
-        driver.get("https://metaplanet.jp/en/analytics")
-
-        # Bitcoin Price USD
-        _click_currency(driver, wait, "Bitcoin Price", "$")
-        btc_usd_text = _extract_card_value(driver, wait, "Bitcoin Price")
-
-        # Bitcoin Price JPY
-        _click_currency(driver, wait, "Bitcoin Price", "¥")
-        btc_jpy_text = _extract_card_value(driver, wait, "Bitcoin Price")
-
-        # Share Price JPY（明示的に¥を押しておく）
-        _click_currency(driver, wait, "Share Price", "¥")
-        share_jpy_text = _extract_card_value(driver, wait, "Share Price")
-
-        driver.quit()
-
-        return {
-            "btc_usd": _usd_to_float(btc_usd_text) if btc_usd_text else None,
-            "btc_jpy": _jpy_to_float(btc_jpy_text)  if btc_jpy_text  else None,
-            "share_jpy": _jpy_to_float(share_jpy_text) if share_jpy_text else None,
-        }
-    except Exception:
-        try:
-            driver.quit()
-        except Exception:
-            pass
-        return {"btc_usd": None, "btc_jpy": None, "share_jpy": None}
+        from metaplanet_data import fetch_latest
+        latest = fetch_latest()
+        for target, source in (("btc_usd", "btc_price_usd"),
+                               ("btc_jpy", "btc_price_jpy"),
+                               ("share_jpy", "share_price_jpy")):
+            value = latest.get(source)
+            if value is not None and np.isfinite(float(value)) and float(value) > 0:
+                result[target] = float(value)
+        result["as_of_date"] = latest.get("as_of_date")
+    except Exception as exc:
+        print(f"[WARN] Official price fetch failed; using dated stored values: {type(exc).__name__}: {exc}")
+    return result
 
 site_vals = fetch_site_latest_values(FETCH_FROM_SITE == "1")
 
@@ -432,15 +373,22 @@ def latest_value(df_all, col):
     return float(df_all.loc[idx, col]), pd.to_datetime(df_all.loc[idx, date_col])
 
 # シートの最新値（フォールバック用）
-btc_usd_sheet, _     = latest_value(df, col_btc_price_usd)
-btc_jpy_man_sheet, _ = latest_value(df, col_btc_price_jpy_man)
+btc_usd_sheet, btc_usd_date = latest_value(df, col_btc_price_usd)
+btc_jpy_man_sheet, btc_jpy_date = latest_value(df, col_btc_price_jpy_man)
 btc_jpy_sheet        = (btc_jpy_man_sheet * 10000.0) if np.isfinite(btc_jpy_man_sheet) else np.nan
-stock_price_sheet, _ = latest_value(df, stock_col)
+stock_price_sheet, stock_price_date = latest_value(df, stock_col)
 
 # headline に使う表示値（サイト優先 → シート）
 btc_usd_disp   = site_vals["btc_usd"]   if site_vals["btc_usd"]   is not None else btc_usd_sheet
 btc_jpy_disp   = site_vals["btc_jpy"]   if site_vals["btc_jpy"]   is not None else btc_jpy_sheet
 stock_yen_disp = site_vals["share_jpy"] if site_vals["share_jpy"] is not None else stock_price_sheet
+stock_display_date = site_vals["as_of_date"] if site_vals["share_jpy"] is not None else stock_price_date
+
+def price_source_label(api_value, stored_date):
+    source_date = site_vals["as_of_date"] if api_value is not None else stored_date
+    date_label = pd.Timestamp(source_date).strftime("%Y-%m-%d") if source_date is not None else "不明"
+    source_label = "公式データ" if api_value is not None else "保存データ"
+    return f"{date_label}・{source_label}"
 
 # baseline_price_yen がNaNでも落ちないように保険
 bpe = baseline_price_yen if (baseline_price_yen is not None and np.isfinite(baseline_price_yen)) else np.nan
@@ -450,15 +398,15 @@ headline_lines = []
 if np.isfinite(btc_usd_disp) or np.isfinite(btc_jpy_disp):
     line = "・Bitcoin価格: "
     if np.isfinite(btc_usd_disp):
-        line += f"${btc_usd_disp:,.0f}"
+        line += f"${btc_usd_disp:,.0f}［{price_source_label(site_vals['btc_usd'], btc_usd_date)}］"
     if np.isfinite(btc_jpy_disp):
-        line += f"（¥{btc_jpy_disp:,.0f}）"
+        line += f"（¥{btc_jpy_disp:,.0f}［{price_source_label(site_vals['btc_jpy'], btc_jpy_date)}］）"
     headline_lines.append(line)
 
 if np.isfinite(stock_yen_disp) or np.isfinite(bpe):
     line = "・株価: "
     if np.isfinite(stock_yen_disp):
-        line += f"¥{stock_yen_disp:,.0f}"
+        line += f"¥{stock_yen_disp:,.0f}［{price_source_label(site_vals['share_jpy'], stock_price_date)}］"
     if np.isfinite(bpe):
         line += f"（mNAV=1: ¥{bpe:,.0f}）"
     headline_lines.append(line)
@@ -477,6 +425,7 @@ def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_p
         "nav1000": pd.to_numeric(nav1000_jpy, errors="coerce"),
         "btc1000": pd.to_numeric(df_all[col_btc_per_1000], errors="coerce"),
     }).dropna()
+    d = d[np.isfinite(d[["price_y", "nav1000", "btc1000"]]).all(axis=1)]
     d = d[(d["price_y"] > 0) & (d["nav1000"] > 0) & (d["btc1000"] > 0)]
     d["log_x"] = np.log10(d["nav1000"].astype(float))
     d["y"]     = np.log10(d["price_y"].astype(float))
@@ -484,6 +433,8 @@ def make_valid_price_df(df_all, date_col, stock_col, col_btc_per_1000, col_btc_p
     return d
 
 df_price = make_valid_price_df(df, date_col, stock_col, col_btc_per_1000, col_btc_price_jpy_man)
+if len(df_price) < 3 or df_price["log_x"].nunique() < 2:
+    raise ValueError("Insufficient valid stock-price history for regression; report was not replaced")
 
 def fit_quantiles_logy(d, q_list):
     if d is None or len(d)==0: return {}
@@ -499,6 +450,8 @@ def fit_quantiles_logy(d, q_list):
     return out
 
 ql_price = fit_quantiles_logy(df_price, base_quantiles)
+if 0.5 not in ql_price:
+    raise ValueError("Median stock-price regression failed; report was not replaced")
 
 def predict_mnav_at_xlog(qlines, xlog, q_list):
     if not qlines or not np.isfinite(xlog): return None
@@ -538,6 +491,7 @@ if stock_col is not None:
         df[date_col],
         df[stock_col],
         override_today=(stock_yen_disp if RSI_INCLUDE_CURR_WEEK == "1" else np.nan),
+        override_date=stock_display_date,
         include_current_week=(RSI_INCLUDE_CURR_WEEK == "1"),
         method=RSI_METHOD
     )
@@ -986,7 +940,15 @@ figs = [
 
 # PNG（要: kaleido）
 for item in figs:
-    pio.write_image(item["fig"], item["png"], width=1200, height=720, scale=2)
+    # These charts contain no TeX. Disable the external MathJax request so
+    # static export works offline and cannot hang on an unrelated CDN.
+    png = kaleido.calc_fig_sync(
+        item["fig"],
+        opts={"format": "png", "width": 1200, "height": 720, "scale": 2},
+        kopts={"mathjax": False},
+    )
+    with open(item["png"], "wb") as output:
+        output.write(png)
 
 # インタラクティブ HTML
 for item in figs:
@@ -1021,6 +983,7 @@ charts_md = "\n\n".join(chart_blocks)
 # README 本文
 block = (
     f"**Last update (JST):** {ts}\n\n"
+    f"**Historical data through:** {history_as_of}\n\n"
     f"### Summary\n"
     f"{headline_md}\n\n"
     f"### Signals\n"
@@ -1036,7 +999,18 @@ start_marker = "<!--REPORT:START-->"
 end_marker   = "<!--REPORT:END-->"
 preface = "# meta-analysis\n\n"
 
-new_readme = f"{preface}\n{start_marker}\n{block}\n{end_marker}\n"
+report = f"{start_marker}\n{block}\n{end_marker}"
+if os.path.exists(readme_path):
+    with open(readme_path, encoding="utf-8") as existing:
+        previous = existing.read()
+    if start_marker in previous and end_marker in previous:
+        before, remainder = previous.split(start_marker, 1)
+        _, after = remainder.split(end_marker, 1)
+        new_readme = before + report + after
+    else:
+        new_readme = previous.rstrip() + "\n\n" + report + "\n"
+else:
+    new_readme = preface + report + "\n"
 with open(readme_path, "w", encoding="utf-8") as f:
     f.write(new_readme)
 print("README overwritten.")
@@ -1068,7 +1042,7 @@ index_html = f"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <title>Meta Analysis — Daily</title>
 <link rel="preconnect" href="https://cdn.plot.ly">
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-{get_plotlyjs_version()}.min.js"></script>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{ margin:16px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif; line-height:1.5; }}
@@ -1088,6 +1062,7 @@ index_html = f"""<!doctype html>
   <div>
     <h1>Meta Analysis — Daily</h1>
     <div class="meta">Last update (JST): <b>{ts}</b></div>
+    <div class="meta">Historical data through: <b>{history_as_of}</b></div>
   </div>
   <div class="btns">
     <a href="../actions" target="_blank">更新（Actions）</a>
@@ -1097,6 +1072,7 @@ index_html = f"""<!doctype html>
 
 <section class="card">
   <h2 style="margin:0 0 8px;font-size:16px;">Summary</h2>
+  <p>{'<br>'.join(escape(line) for line in headline_lines)}</p>
   {table_html}
 </section>
 
