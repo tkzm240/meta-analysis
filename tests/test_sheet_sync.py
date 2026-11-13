@@ -4,6 +4,14 @@ import unittest
 from sheet_sync import HEADERS, data_row, plan_updates, sync_worksheet
 
 
+LEGACY_HEADERS = [
+    "g", "Time", "BTC保有量", "1000株当たりのBTC", "株価(円)【SBI】",
+    "BTC Price ($) : https://jp.investing.com/crypto/bitcoin/historical-data",
+    "MarketCap", "BTCNAV", "Debt", "mNAV", "real_mNAV", "BTC価格(万円）",
+    "ドル円", "株式数(億）",
+]
+
+
 def record(day="2026-11-13"):
     return {"date": day, "btc_holdings": 44000, "btc_per_1000": .028,
             "share_price_jpy": 219, "btc_price_usd": 68000,
@@ -65,6 +73,32 @@ class SheetTests(unittest.TestCase):
         self.assertEqual(report["added"], 0)
         self.assertEqual(report["duplicate_existing_dates"], 1)
 
+    def test_production_legacy_header_is_accepted_and_preserved(self):
+        old = [list(LEGACY_HEADERS), data_row(record(), 1, 2)]
+        old[1][2] = ""
+        original = copy.deepcopy(old)
+        changes, report = plan_updates(old, [record()])
+        self.assertEqual(report["updated"], 1)
+        self.assertEqual(report["added"], 0)
+        self.assertEqual([change["range"] for change in changes], ["A2:N2"])
+        self.assertEqual(changes[0]["values"][0][2], 44000)
+        self.assertEqual(old, original)
+        self.assertEqual(old[0], LEGACY_HEADERS)
+
+    def test_legacy_date_header_does_not_allow_wrong_financial_columns(self):
+        for column, wrong_label in ((3, "BTC Price"), (9, "Market Cap")):
+            with self.subTest(column=column):
+                header = list(LEGACY_HEADERS)
+                header[column] = wrong_label
+                with self.assertRaisesRegex(ValueError, "Unexpected A:N column layout"):
+                    plan_updates([header, data_row(record(), 1, 2)], [record()])
+
+    def test_legacy_header_still_rejects_invalid_row_dates(self):
+        old = [list(LEGACY_HEADERS), data_row(record(), 1, 2)]
+        old[1][0] = "not a date"
+        with self.assertRaisesRegex(ValueError, "Unsupported sheet date"):
+            plan_updates(old, [record()])
+
     def test_rejects_unrecognized_layout_and_source_before_writing(self):
         for source in ([], [record(), record()], [record(), record("2026-11-12")]):
             with self.assertRaises(ValueError):
@@ -100,3 +134,4 @@ class SheetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

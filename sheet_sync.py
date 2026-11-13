@@ -63,8 +63,10 @@ def plan_updates(existing, records, force=False):
     maximum_sequence = 0
     if existing:
         header = existing[0]
-        if len(header) < 14 or header[0].strip().lower() != "date" or header[1].strip().lower() != "time":
-            raise ValueError(f"Expected the existing 14-column Date/Time table in A:N; no cells changed; observed headers={header[:14]!r}")
+        # The existing production sheet labels its date column "g". Keep that
+        # observed legacy alias while checking the other anchors and every date.
+        if len(header) < 14 or header[0].strip().lower() not in ("date", "g") or header[1].strip().lower() != "time":
+            raise ValueError(f"Expected the existing 14-column date/Time table in A:N; no cells changed; observed headers={header[:14]!r}")
         if "1000" not in header[3] or header[9].strip().lower() != "mnav":
             raise ValueError(f"Unexpected A:N column layout; no cells changed; observed headers={header[:14]!r}")
     else:
