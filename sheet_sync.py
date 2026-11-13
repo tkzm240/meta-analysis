@@ -64,9 +64,9 @@ def plan_updates(existing, records, force=False):
     if existing:
         header = existing[0]
         if len(header) < 14 or header[0].strip().lower() != "date" or header[1].strip().lower() != "time":
-            raise ValueError("Expected the existing 14-column Date/Time table in A:N; no cells changed")
+            raise ValueError(f"Expected the existing 14-column Date/Time table in A:N; no cells changed; observed headers={header[:14]!r}")
         if "1000" not in header[3] or header[9].strip().lower() != "mnav":
-            raise ValueError("Unexpected A:N column layout; no cells changed")
+            raise ValueError(f"Unexpected A:N column layout; no cells changed; observed headers={header[:14]!r}")
     else:
         updates.append({"range": "A1:N1", "values": [HEADERS]})
     for n, values in enumerate(existing[1:], 2):
@@ -133,3 +133,4 @@ def sync_worksheet(spreadsheet, worksheet, records, mode="sync"):
             raise RuntimeError(f"Sheet verification failed at row {n + 1}")
     report["verified"] = True
     return report
+
